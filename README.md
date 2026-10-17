@@ -121,15 +121,57 @@ so no controller contains a `try/catch` and no stack trace ever reaches the clie
 
 ---
 
-## Stretch goal
+## Stretch goals
 
-**Option 5 — security checks.** Scanning the 121 resolved runtime dependencies
-found **17 published advisories across 5 transitive packages**, including three
-authentication/authorisation defects in `tomcat-embed-core 11.0.24` reachable over
-HTTP. All five were remediated by overriding the Spring Boot BOM versions
-(`tomcat.version`, `jackson-bom.version`, plus an explicit pin for the legacy
-Jackson 2.x line). A re-scan reports **0 findings**, and the full 38-check
-endpoint sweep still passes on the rebuilt application.
+### Option 1 — CI pipeline (CircleCI): build → test → publish to Docker Hub
+
+`.circleci/config.yml` runs on every push. It is a **second, independent pipeline**
+alongside the Railway deployment pipeline: Railway watches `main` and redeploys,
+while this one produces a versioned image in Docker Hub.
+
+**`build-and-test`** (runs on every branch, so a broken change is caught before it
+reaches `main`):
+
+1. Caches `~/.m2/repository`, keyed on a `pom.xml` checksum
+2. `mvn -B clean package` — the test phase included, not `-DskipTests`
+3. **Smoke-tests the packaged JAR** by booting it and asserting each endpoint's
+   status code, including the failure path:
+
+   ```
+   PASS  GET  -> 200          PASS  PUT /1/complete -> 200
+   PASS  GET /999999 -> 404   PASS  GET /1 -> 200
+   PASS  POST -> created id 1 PASS  DELETE /1 -> 200
+   PASS  PUT /1 -> 200        PASS  GET /1 -> 404
+   PASS  GET /summary -> 200
+   ```
+
+   The project has no JUnit classes, so `mvn test` passes vacuously — this step is
+   the pipeline's real test. It needs no model API key, because `/summary`
+   short-circuits before calling the model when there are no tasks.
+
+**`publish`** (only on `main`, only after `build-and-test` passes, so a failing
+change can never reach the registry): builds from the repository's `Dockerfile`
+via `setup_remote_docker` and pushes two tags — `latest` and the commit SHA.
+
+**Credentials are not in the repository.** `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` are read from CircleCI environment variables; the job fails fast
+with a clear message if either is missing. The token should be a Docker Hub access
+token with Read & Write scope, never the account password.
+
+| | |
+|---|---|
+| Pipeline run | _to be added once the project is connected to CircleCI_ |
+| Image on Docker Hub | _to be added once the first pipeline run publishes_ |
+
+### Option 5 — dependency security checks
+
+Scanning the 121 resolved runtime dependencies found **17 published advisories
+across 5 transitive packages**, including three authentication/authorisation
+defects in `tomcat-embed-core 11.0.24` reachable over HTTP. All five were
+remediated by overriding the Spring Boot BOM versions (`tomcat.version`,
+`jackson-bom.version`, plus an explicit pin for the legacy Jackson 2.x line). A
+re-scan reports **0 findings**, and the full 38-check endpoint sweep still passes
+on the rebuilt application.
 
 Full detail — method, before/after results, the tooling detour, and the
 container-scan gap — is in [`SECURITY.md`](SECURITY.md).
@@ -215,3 +257,18 @@ after emptying the store the next id continues from the counter rather than
 returning to 1. This is deliberate — a client holding id 1 can never be handed a
 different task — but it means the server's history, not its current contents,
 decides the next id.
+
+**5. A bodyless `PUT` returns 500, not 400.**
+`PUT /api/tasks/{id}` takes `@RequestBody`, so a request sent without a body is
+rejected before it ever reaches the service. Module 3 specified no field
+validation, so there is no `@Valid` / `BindingResult` path that would turn this
+into a 400 — the catch-all handler reports it as a 500. Worth knowing when
+testing by hand (and in Postman, where an empty body is easy to send by
+accident), because it looks like a server fault when it is a malformed request.
+Send a JSON body with `Content-Type: application/json`:
+
+```
+curl -X PUT http://localhost:8080/api/tasks/1 \
+     -H 'Content-Type: application/json' \
+     -d '{"title":"Updated title","completed":false}'
+```
