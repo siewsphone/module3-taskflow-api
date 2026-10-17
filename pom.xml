@@ -21,6 +21,16 @@
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
+
+        <!--
+          Security overrides. Spring Boot 4.1.1's BOM pins tomcat at 11.0.24 and
+          jackson-bom at 3.1.5; both carry published CVEs. These properties are the
+          names Spring Boot's own dependencyManagement reads, so setting them
+          upgrades every artifact in that line together rather than pinning one
+          jar and leaving its siblings behind.
+        -->
+        <tomcat.version>11.0.25</tomcat.version>
+        <jackson-bom.version>3.1.7</jackson-bom.version>
     </properties>
 
     <dependencies>
@@ -66,6 +76,23 @@
                 <version>${spring-ai.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <!--
+              The legacy Jackson 2.x line (com.fasterxml) arrives transitively and
+              is NOT governed by the jackson-bom.version property above, which now
+              controls Jackson 3.x (tools.jackson). Pin it explicitly so the two
+              CVE-affected jars move to a fixed release.
+            -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>2.21.7</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>2.21.7</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

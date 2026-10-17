@@ -14,6 +14,10 @@ target/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Windows/NTFS metadata written when files are copied from a Windows host
+*:Zone.Identifier
 
 # Environment / secrets - never commit these
 .env
