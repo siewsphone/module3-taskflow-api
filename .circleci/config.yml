@@ -1,0 +1,185 @@
+version: 2.1
+
+# ---------------------------------------------------------------------------
+# TaskFlow API — Module 4 stretch goal, OPTION 1: CI pipeline
+#
+#   build  ->  test  ->  publish the image to Docker Hub, on every push to main
+#
+# This runs alongside the existing deployment pipeline: Railway watches main and
+# redeploys, while this pipeline produces a versioned image in Docker Hub.
+#
+# CREDENTIALS
+# -----------
+# Nothing secret is stored in this file. Two variables must be set in
+# CircleCI -> Project Settings -> Environment Variables:
+#
+#   DOCKERHUB_USERNAME   your Docker Hub account name
+#   DOCKERHUB_TOKEN      a Docker Hub *access token* with Read & Write scope
+#                        (create at hub.docker.com -> Account Settings ->
+#                         Personal access tokens). Do NOT use your password.
+#
+# They can also come from a CircleCI Context if you prefer, in which case add
+# `context: dockerhub` to the publish job below.
+# ---------------------------------------------------------------------------
+
+jobs:
+
+  # -------------------------------------------------------------------------
+  # Build and test. Runs on every branch and every pull request, so a broken
+  # change is caught before it reaches main.
+  # -------------------------------------------------------------------------
+  build-and-test:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+
+      # Cache the Maven repository. Keyed on pom.xml so the cache is rebuilt
+      # when dependencies change, with a fallback so the first run after a
+      # dependency edit is still partially warm.
+      - restore_cache:
+          keys:
+            - v1-m2-{{ checksum "pom.xml" }}
+            - v1-m2-
+
+      # `mvn package` runs the test phase; this is not -DskipTests.
+      - run:
+          name: Build and run tests
+          command: mvn -B clean package
+
+      - save_cache:
+          key: v1-m2-{{ checksum "pom.xml" }}
+          paths:
+            - ~/.m2/repository
+
+      # The project has no JUnit classes, so `mvn test` passes vacuously. This
+      # step is the pipeline's real test: it boots the packaged JAR and asserts
+      # each endpoint's status code, including the failure path. No model API
+      # key is needed because /summary short-circuits when there are no tasks.
+      - run:
+          name: Smoke-test the packaged JAR
+          command: |
+            set -euo pipefail
+            java -jar target/taskflow-api-*.jar > /tmp/app.log 2>&1 &
+            APP_PID=$!
+            trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+
+            echo "waiting for the application to accept requests..."
+            for i in $(seq 1 40); do
+              if curl -sf -o /dev/null http://localhost:8080/api/tasks; then
+                echo "up after ~$((i * 2))s"
+                break
+              fi
+              sleep 2
+              if [ "$i" -eq 40 ]; then
+                echo "application never became ready; last log lines:"
+                tail -40 /tmp/app.log
+                exit 1
+              fi
+            done
+
+            fail=0
+            req() {   # method, path, expected-status, [json-body]
+              local method="$1" path="$2" want="$3" body="${4:-}" got
+              if [ -n "$body" ]; then
+                got=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+                      -H 'Content-Type: application/json' -d "$body" \
+                      "http://localhost:8080/api/tasks$path")
+              else
+                got=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" \
+                      "http://localhost:8080/api/tasks$path")
+              fi
+              if [ "$got" = "$want" ]; then
+                echo "  PASS  $method $path -> $got"
+              else
+                echo "  FAIL  $method $path -> $got (expected $want)"
+                fail=1
+              fi
+            }
+
+            echo "smoke-testing the packaged application:"
+            req GET  ""          200
+            req GET  "/999999"   404
+
+            CREATED=$(curl -s -X POST -H 'Content-Type: application/json' \
+                      -d '{"title":"ci smoke test"}' \
+                      http://localhost:8080/api/tasks)
+            ID=$(printf '%s' "$CREATED" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+            if [ -z "$ID" ]; then
+              echo "  FAIL  POST returned no parsable id: $CREATED"
+              fail=1
+            else
+              echo "  PASS  POST -> created id $ID"
+              # PUT carries a JSON body on purpose: the endpoint takes
+              # @RequestBody, so a bodyless PUT is rejected before it reaches
+              # the service and returns 500 rather than 200.
+              req PUT    "/$ID"          200 '{"title":"ci smoke test (edited)","completed":false}'
+              req PUT    "/$ID/complete" 200
+              req GET    "/$ID"          200
+              req DELETE "/$ID"          200
+              req GET    "/$ID"          404
+            fi
+
+            req GET  "/summary"  200
+
+            if [ "$fail" -ne 0 ]; then
+              echo "smoke test failed"
+              exit 1
+            fi
+            echo "all smoke tests passed"
+
+      - store_artifacts:
+          path: target
+          destination: build-output
+
+  # -------------------------------------------------------------------------
+  # Publish to Docker Hub. Only runs on main, and only after build-and-test has
+  # passed, so a failing change can never reach the registry.
+  # -------------------------------------------------------------------------
+  publish:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+
+      - setup_remote_docker
+
+      # Builds from the repository's Dockerfile, so this also proves the
+      # multi-stage build works on a clean machine. Stage 1 runs Maven inside
+      # the image — the same Maven run as the test job, but in isolation from
+      # whatever the CI container has installed, which is the point.
+      #
+      # Tagged twice: the commit SHA for traceability, and latest for the
+      # convenience tag. Bump semver tags here if you take on Option 4.
+      - run:
+          name: Build the Docker image
+          command: |
+            set -euo pipefail
+            : "${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME in CircleCI project settings}"
+            docker build \
+              -t "$DOCKERHUB_USERNAME/taskflow-api:latest" \
+              -t "$DOCKERHUB_USERNAME/taskflow-api:$CIRCLE_SHA1" \
+              .
+
+      - run:
+          name: Push to Docker Hub
+          command: |
+            set -euo pipefail
+            : "${DOCKERHUB_TOKEN:?set DOCKERHUB_TOKEN in CircleCI project settings}"
+            echo "$DOCKERHUB_TOKEN" \
+              | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker push "$DOCKERHUB_USERNAME/taskflow-api:latest"
+            docker push "$DOCKERHUB_USERNAME/taskflow-api:$CIRCLE_SHA1"
+            docker logout
+
+workflows:
+  build-test-publish:
+    jobs:
+      - build-and-test
+
+      - publish:
+          requires:
+            - build-and-test
+          filters:
+            branches:
+              only: main
