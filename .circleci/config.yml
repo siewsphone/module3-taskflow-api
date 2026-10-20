@@ -13,8 +13,8 @@ version: 2.1
 # Nothing secret is stored in this file. Two variables must be set in
 # CircleCI -> Project Settings -> Environment Variables:
 #
-#   DOCKERHUB_USERNAME   your Docker Hub account name
-#   DOCKERHUB_TOKEN      a Docker Hub *access token* with Read & Write scope
+#   DOCKER_USERNAME   your Docker Hub account name
+#   DOCKER_TOKEN      a Docker Hub *access token* with Read & Write scope
 #                        (create at hub.docker.com -> Account Settings ->
 #                         Personal access tokens). Do NOT use your password.
 #
@@ -155,21 +155,21 @@ jobs:
           name: Build the Docker image
           command: |
             set -euo pipefail
-            : "${DOCKERHUB_USERNAME:?set DOCKERHUB_USERNAME in CircleCI project settings}"
+            : "${DOCKER_USERNAME:?set DOCKER_USERNAME in CircleCI project settings}"
             docker build \
-              -t "$DOCKERHUB_USERNAME/taskflow-api:latest" \
-              -t "$DOCKERHUB_USERNAME/taskflow-api:$CIRCLE_SHA1" \
+              -t "$DOCKER_USERNAME/taskflow-api:latest" \
+              -t "$DOCKER_USERNAME/taskflow-api:$CIRCLE_SHA1" \
               .
 
       - run:
           name: Push to Docker Hub
           command: |
             set -euo pipefail
-            : "${DOCKERHUB_TOKEN:?set DOCKERHUB_TOKEN in CircleCI project settings}"
-            echo "$DOCKERHUB_TOKEN" \
-              | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-            docker push "$DOCKERHUB_USERNAME/taskflow-api:latest"
-            docker push "$DOCKERHUB_USERNAME/taskflow-api:$CIRCLE_SHA1"
+            : "${DOCKER_TOKEN:?set DOCKER_TOKEN in CircleCI project settings}"
+            echo "$DOCKER_TOKEN" \
+              | docker login -u "$DOCKER_USERNAME" --password-stdin
+            docker push "$DOCKER_USERNAME/taskflow-api:latest"
+            docker push "$DOCKER_USERNAME/taskflow-api:$CIRCLE_SHA1"
             docker logout
 
 workflows:
