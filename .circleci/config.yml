@@ -76,13 +76,28 @@ jobs:
             echo "Pushing image to Docker Hub..."
             docker push $DOCKER_USERNAME/taskflow-api:latest
 
+  # ==========================================
+  # DEPLOY JOB - Tell Railway to redeploy
+  # ==========================================
+  deploy:
+    docker:
+      - image: cimg/node:lts
+    steps:
+      - run:
+          name: Redeploy latest image on Railway
+          command: |
+            echo "Asking Railway to redeploy the latest image..."
+            npx --yes @railway/cli redeploy --service "$RAILWAY_SERVICE_ID" --yes
+            echo "Railway is now pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
+
 
 workflows:
   build-test-publish:
     jobs:
       - build
-
       - publish:
           context: docker-hub
-
+      - deploy:
+          requires:
+            - publish
 
