@@ -18,7 +18,7 @@ Dockerfile and deployed to Railway.
 | **Live URL** | <https://module3-taskflow-api-production.up.railway.app/api/tasks> |
 | **Platform** | Railway (region: Southeast Asia, 1 replica) |
 | **Runtime** | Java 21 (`java@21.0.12`) |
-| **Source** | this repository, `main` branch, via Railway's GitHub integration |
+| **Source** | Docker image `siewsphone/taskflow-api:latest`, built and published by the CircleCI pipeline below; Railway runs that image |
 | **Build** | multi-stage `Dockerfile` in the project root |
 
 ---
@@ -43,11 +43,10 @@ CMD ["java", "-jar", "app.jar"]
 ```
 
 **Why two stages?** `target/` is listed in `.gitignore`, so the compiled JAR is
-never pushed to GitHub. When Railway builds the image it clones the source and
-has no JAR to run. Stage 1 solves that by building the JAR *inside* the image
-with Maven. Stage 2 then copies only that one JAR into a small Alpine JRE image
-and runs it — the Maven build toolchain (several hundred MB) is discarded with
-the build stage and never ships to production.
+never pushed to GitHub. The CI pipeline builds the image from the source with
+Maven *inside* stage 1. Stage 2 then copies only that one JAR into a small
+Alpine JRE image and runs it — the Maven build toolchain (several hundred MB)
+is discarded with the build stage and never ships to production.
 
 A `.dockerignore` keeps `target/`, `.git/` and the IDE folders out of the build
 context so the build stays fast.
@@ -74,7 +73,7 @@ The first build takes a few minutes while Maven downloads dependencies.
 > `target/taskflow-api-0.0.1-SNAPSHOT.jar`, and that JAR was then started with
 > `java -jar` on port 8080 and exercised with the full endpoint sweep below —
 > which is exactly what Stage 2 does. The `docker build` / `docker run` commands
-> themselves must be executed on a machine running the Docker daemon; see
+> themselves run in the CI pipeline (see Stretch goal, Option 1); see
 > [Notes and limitations](#notes-and-limitations).
 
 ---
@@ -82,8 +81,10 @@ The first build takes a few minutes while Maven downloads dependencies.
 ## Task 3 — Deployed to Railway
 
 1. Committed the `Dockerfile` and pushed to `main`.
-2. Railway → **New Project** → **Deploy from GitHub repo** → selected this repository.
-3. Railway detects the `Dockerfile` in the repository root and builds from it.
+2. Railway → **New Project** → deployed the TaskFlow service.
+3. The service runs the published image
+   `siewsphone/taskflow-api:latest` from Docker Hub, rebuilt by the CI
+   pipeline on every push to `main`.
 4. **Settings → Networking → Generate Domain**, target port **8080**.
 
 ---
@@ -123,13 +124,13 @@ so no controller contains a `try/catch` and no stack trace ever reaches the clie
 
 ## Stretch goals
 
-### Option 1 — CI pipeline (CircleCI): build → test → publish to Docker Hub
+### Option 1 — CI pipeline (CircleCI): build → test → publish to Docker Hub → redeploy
 
-`.circleci/config.yml` runs on every push. It is a **second, independent pipeline**
-alongside the Railway deployment pipeline: Railway watches `main` and redeploys,
-while this one produces a versioned image in Docker Hub.
+`.circleci/config.yml` runs a single `build-test-publish` workflow on every push.
+It is a **CI pipeline** running alongside the deployment: every green run
+produces a fresh image in Docker Hub and then asks Railway to pull it.
 
-**`build-and-test`** (runs on every branch, so a broken change is caught before it
+**`build`** (runs on every branch, so a broken change is caught before it
 reaches `main`):
 
 1. Caches `~/.m2/repository`, keyed on a `pom.xml` checksum
@@ -149,19 +150,73 @@ reaches `main`):
    the pipeline's real test. It needs no model API key, because `/summary`
    short-circuits before calling the model when there are no tasks.
 
-**`publish`** (only on `main`, only after `build-and-test` passes, so a failing
-change can never reach the registry): builds from the repository's `Dockerfile`
-via `setup_remote_docker` and pushes two tags — `latest` and the commit SHA.
+**`publish`** (only on `main`, only after `build` passes, so a failing change
+can never reach the registry): builds from the repository's `Dockerfile` via
+`setup_remote_docker` and pushes the `latest` tag.
 
-**Credentials are not in the repository.** `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN` are read from CircleCI environment variables; the job fails fast
-with a clear message if either is missing. The token should be a Docker Hub access
-token with Read & Write scope, never the account password.
+**`deploy`** (after `publish`): asks Railway to pull the new image via the
+Railway CLI — see note 6 in [Notes and
+limitations](#notes-and-limitations) for its current state.
+
+**Credentials are not in the repository.** `DOCKER_USERNAME` and
+`DOCKER_TOKEN` are read from a CircleCI **context** (`docker-hub`); the job
+fails fast with a clear message if either is missing. The token should be a
+Docker Hub access token with Read & Write scope, never the account password.
 
 | | |
 |---|---|
-| Pipeline run | _to be added once the project is connected to CircleCI_ |
-| Image on Docker Hub | _to be added once the first pipeline run publishes_ |
+| Pipeline run (green, publishes the current image) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/5> |
+| Image on Docker Hub | <https://hub.docker.com/r/siewsphone/taskflow-api> |
+
+### Option 2 — Frontend on Netlify
+
+**Live frontend: <https://capable-licorice-a9c632.netlify.app>**
+
+A small React single-page app that consumes the deployed TaskFlow API — no
+local backend, every call goes to the live Railway URL.
+
+| | |
+|---|---|
+| **Frontend URL** | <https://capable-licorice-a9c632.netlify.app> |
+| **Hosted on** | Netlify (static build of `frontend/`, folder `frontend/` in this repo) |
+| **Stack** | Vite + React 19, state via Context + `useReducer` |
+| **API calls** | `GET /api/tasks`, `POST /api/tasks`, `PUT /api/tasks/{id}/complete`, `PUT /api/tasks/{id}`, `DELETE /api/tasks/{id}` |
+
+**What it does:** lists the tasks from the live API on load, adds new tasks,
+completes and un-completes them, deletes them, and shows live counts
+(total / done / to do). API failures surface a friendly banner with a retry
+suggestion instead of a stack trace.
+
+**CORS.** With the frontend on Netlify and the API on Railway, the browser
+blocks every fetch until the API names the frontend's origin. Added
+`src/main/java/sg/edu/ntu/taskflowapi/config/CorsConfig.java`:
+
+```java
+@Configuration
+public class CorsConfig implements WebMvcConfigurer {
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+                .allowedOriginPatterns("https://*.netlify.app", "http://localhost:5173")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS");
+    }
+}
+```
+
+The pattern covers the deployed Netlify domain (and any future subdomain) plus
+the Vite dev origin. Verified by booting the packaged JAR locally and checking
+the preflight response:
+
+```
+OPTIONS /api/tasks  (Origin: https://capable-licorice-a9c632.netlify.app)
+  -> Access-Control-Allow-Origin: https://capable-licorice-a9c632.netlify.app
+     Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS
+```
+
+![TaskFlow frontend on Netlify showing live tasks from the API](screenshots/frontend.png)
+
+*(Screenshot captured once the CORS build is live on Railway — see note 6.)*
 
 ### Option 5 — dependency security checks
 
@@ -200,6 +255,15 @@ container-scan gap — is in [`SECURITY.md`](SECURITY.md).
 mvn clean package -DskipTests && java -jar target/*.jar
 ```
 
+The frontend (optional):
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server on :5173, calls the live Railway API
+npm run build    # static site in frontend/dist, ready for Netlify
+```
+
 ---
 
 ## Notes and limitations
@@ -233,18 +297,12 @@ watching the in-memory id counter: it kept climbing (same process) until it
 reset to 1, which only happens when the JVM restarts, and `/summary` returned 200
 from that moment on.
 
-**2. `docker build` and `docker run` were not run locally.**
-The environment where this README was prepared has the Docker CLI but no Docker
-daemon and no privileges to start one, so the two commands in Task 2 were not run
-first-hand. Both stages were verified separately instead (Maven build produced the
-JAR; the JAR was run on port 8080 and passed the full endpoint sweep).
-
-**The Dockerfile has, however, been proven end-to-end in production.** Railway
-built the image from it with no build configuration beyond the file itself, the
-deployment went live, and every endpoint below was then verified against that
-running container. If you want the local run on record too, execute
-`docker build -t taskflow:latest .` and
-`docker run -p 8080:8080 taskflow:latest` on a machine with the daemon running.
+**2. `docker build` and `docker run` were not run on a local machine with a Docker
+daemon.** The environment where this README was prepared has the Docker CLI but
+no daemon. Both stages were verified separately (Maven build produced the JAR;
+the JAR was run on port 8080 and passed the full endpoint sweep), and the same
+`docker build` + `docker push` path now runs green in the CircleCI `publish`
+job on every push to `main`.
 
 **3. Task state is in-memory.**
 Tasks live in a `TaskRepository` backed by a list, not a database, so they are
@@ -272,3 +330,19 @@ curl -X PUT http://localhost:8080/api/tasks/1 \
      -H 'Content-Type: application/json' \
      -d '{"title":"Updated title","completed":false}'
 ```
+
+**6. The Railway image lags the pipeline by one manual click.**
+The Railway service pulls `siewsphone/taskflow-api:latest` from Docker Hub, and
+Railway does not re-pull on its own when CI pushes a new `latest`. The pipeline's
+`deploy` job tries to trigger the pull with
+`npx @railway/cli redeploy --service "$RAILWAY_SERVICE_ID" --yes`, but that step
+currently fails because the npm package downloads its real binary in a
+postinstall script, which CI's script policy skips — the CLI exits immediately
+with *"could not find the CLI binary"*. Until that step is fixed (install the
+Railway CLI via its own installer instead of `npx`, and provide
+`RAILWAY_TOKEN` + `RAILWAY_SERVICE_ID` as CircleCI environment variables), the
+current way to ship a published image is one click: **Railway dashboard →
+service → Deploys → Redploy latest image**. This is why the CORS build
+(published to Docker Hub by pipeline run
+[#5](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/5))
+is not yet served live: the image is published, the pull has not been triggered.
