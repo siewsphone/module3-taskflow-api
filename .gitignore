@@ -22,3 +22,7 @@ Thumbs.db
 # Environment / secrets - never commit these
 .env
 *.env
+
+# Frontend (Netlify stretch goal)
+frontend/node_modules/
+frontend/dist/
