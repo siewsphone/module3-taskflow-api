@@ -182,12 +182,18 @@ jobs:
           command: |
             # The npm package fetches its real binary in a postinstall script,
             # which CI's script policy skips — that is why `npx @railway/cli`
-            # cannot work here. The official installer drops the binary directly.
-            bash <(curl -fsSL cli.new)
+            # cannot work here. Railway's own installer drops the binary, but it
+            # prompts "Install railway to ~/.railway/bin? [y/N]" and exits 1 on a
+            # non-interactive stdin, so it must be given --yes.
+            curl -fsSL cli.new | bash -s -- --yes
+            export PATH="$HOME/.railway/bin:$PATH"
             railway --version
       - run:
           name: Redeploy the published image
           command: |
+            # Each step is a fresh shell, so the CLI's install path must be
+            # re-exported here.
+            export PATH="$HOME/.railway/bin:$PATH"
             railway redeploy --service "$RAILWAY_SERVICE_ID" --yes
             echo "Railway is pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
 
