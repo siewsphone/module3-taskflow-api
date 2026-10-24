@@ -3,30 +3,34 @@ version: 2.1
 # ---------------------------------------------------------------------------
 # TaskFlow API — Module 4 stretch goal, OPTION 1: CI pipeline
 #
-#   build  ->  test  ->  publish the image to Docker Hub, on every push to main
+#   build (+ smoke test)  ->  publish image to Docker Hub  ->  ask Railway to pull it
 #
-# This runs alongside the existing deployment pipeline: Railway watches main and
-# redeploys, while this pipeline produces a versioned image in Docker Hub.
+# Runs on every push to any branch, so a broken change is caught before it
+# reaches main. `publish` and `deploy` only run for main, after `build` passes,
+# so a failing change can never reach the registry or the deployment.
 #
 # CREDENTIALS
 # -----------
-# Nothing secret is stored in this file. Two variables must be set in
-# CircleCI -> Project Settings -> Environment Variables:
+# Nothing secret is stored in this file. These must be set in
+# CircleCI -> Project Settings -> Environment Variables (or in a context):
 #
-#   DOCKER_USERNAME   your Docker Hub account name
-#   DOCKER_TOKEN      a Docker Hub *access token* with Read & Write scope
-#                        (create at hub.docker.com -> Account Settings ->
-#                         Personal access tokens). Do NOT use your password.
+#   DOCKER_USERNAME        Docker Hub account name        (context: docker-hub)
+#   DOCKER_TOKEN           Docker Hub access token, Read & Write scope
+#   RAILWAY_TOKEN          Railway project token          (deploy job only)
+#   RAILWAY_SERVICE_ID     Railway service id             (deploy job only)
 #
-# They can also come from a CircleCI Context if you prefer, in which case add
-# `context: dockerhub` to the publish job below.
+# The deploy job halts successfully, with an explanation, when the two Railway
+# variables are absent — so the pipeline stays green and the published image is
+# shipped from the Railway dashboard instead of failing on a credential it was
+# never given.
 # ---------------------------------------------------------------------------
 
 jobs:
 
   # -------------------------------------------------------------------------
-  # Build and test. Runs on every branch and every pull request, so a broken
-  # change is caught before it reaches main.
+  # Build and test. The project has no JUnit classes, so `mvn package` passes
+  # vacuously; the real test is the smoke sweep at the end of this job, which
+  # boots the packaged JAR and asserts every endpoint's status code.
   # -------------------------------------------------------------------------
   build:
     docker:
@@ -38,10 +42,84 @@ jobs:
             - maven-deps-{{ checksum "pom.xml" }}
             - maven-deps-
       - run:
-          name: Install dependencies and build
+          name: Build and package (test phase included)
+          command: mvn -B clean package
+      - run:
+          name: Smoke-test the packaged JAR
           command: |
-            echo "Building the application..."
-            mvn clean install -DskipTests
+            set -u
+            BASE=http://localhost:8080
+            CT='Content-Type: application/json'
+            BODY=/tmp/smoke_body
+            fail=0
+
+            check() { # expected actual label
+              if [ "$2" = "$1" ]; then
+                printf 'PASS  %-26s -> %s\n' "$3" "$2"
+              else
+                printf 'FAIL  %-26s -> %s (expected %s)\n' "$3" "$2" "$1"
+                fail=1
+              fi
+            }
+            code() { curl -s -o "$BODY" -w '%{http_code}' "$@"; }
+
+            echo "Starting the packaged application..."
+            java -jar target/*.jar > app.log 2>&1 &
+            APP_PID=$!
+            trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+
+            up=0
+            for i in $(seq 1 90); do
+              if curl -fsS -o /dev/null "$BASE/api/tasks"; then
+                echo "Application accepting requests after ${i}s"
+                up=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$up" -ne 1 ]; then
+              echo "Application never became ready; last 50 log lines:"
+              tail -50 app.log
+              exit 1
+            fi
+
+            # Start from an empty store so ids and counts are deterministic.
+            for id in $(curl -s "$BASE/api/tasks" | grep -o '"id":[0-9]*' | cut -d: -f2); do
+              curl -s -o /dev/null -X DELETE "$BASE/api/tasks/$id"
+            done
+
+            check 200 "$(code "$BASE/api/tasks")"                   "GET /tasks"
+            check 404 "$(code "$BASE/api/tasks/999999")"            "GET /tasks/999999"
+            check 201 "$(code -X POST "$BASE/api/tasks" -H "$CT" \
+                          -d '{"title":"Smoke test task","completed":false}')" "POST /tasks"
+
+            ID=$(grep -o '"id":[0-9]*' "$BODY" | cut -d: -f2)
+            echo "POST created id ${ID:-<none>}"
+            if [ -z "${ID:-}" ]; then
+              echo "FAIL  POST response carried no id"
+              fail=1
+              ID=1
+            fi
+
+            check 200 "$(code -X PUT "$BASE/api/tasks/$ID" -H "$CT" \
+                          -d '{"title":"Smoke test renamed","completed":false}')" "PUT /tasks/{id}"
+            check 200 "$(code -X PUT "$BASE/api/tasks/$ID/complete" -H "$CT")"  "PUT /tasks/{id}/complete"
+            check 200 "$(code "$BASE/api/tasks/$ID")"               "GET /tasks/{id}"
+            check 200 "$(code -X DELETE "$BASE/api/tasks/$ID")"     "DELETE /tasks/{id}"
+            check 404 "$(code "$BASE/api/tasks/$ID")"               "GET /tasks/{id} (after)"
+            # Nothing is left in the store here, so /summary short-circuits
+            # before it reaches the model and needs no API key.
+            check 200 "$(code "$BASE/api/tasks/summary")"          "GET /tasks/summary"
+
+            echo "---"
+            if [ "$fail" -ne 0 ]; then
+              echo "SMOKE TEST FAILED"
+              exit 1
+            fi
+            echo "SMOKE TEST PASSED"
+      - store_artifacts:
+          path: app.log
+          when: on_fail
       - save_cache:
           paths:
             - ~/.m2
@@ -55,40 +133,63 @@ jobs:
   # ==========================================
   # PUBLISH JOB - Build and push Docker image
   # ==========================================
+  # Two tags per build: `latest` (what the Railway service tracks) and the
+  # short commit SHA, so a published image stays traceable to its commit after
+  # `latest` has moved on.
   publish:
     docker:
       - image: cimg/base:stable
     steps:
       - checkout
-      - attach_workspace:
-          at: .
       - setup_remote_docker
       - run:
           name: Build Docker image
           command: |
-            echo "Building Docker image..."
-            docker build -t $DOCKER_USERNAME/taskflow-api:latest .
+            IMAGE="$DOCKER_USERNAME/taskflow-api"
+            SHA_TAG="${CIRCLE_SHA1:0:7}"
+            echo "Building $IMAGE:latest and $IMAGE:$SHA_TAG"
+            docker build -t "$IMAGE:latest" -t "$IMAGE:$SHA_TAG" .
       - run:
           name: Push to Docker Hub
           command: |
+            IMAGE="$DOCKER_USERNAME/taskflow-api"
+            SHA_TAG="${CIRCLE_SHA1:0:7}"
             echo "Logging in to Docker Hub..."
-            echo $DOCKER_TOKEN | docker login -u $DOCKER_USERNAME --password-stdin
-            echo "Pushing image to Docker Hub..."
-            docker push $DOCKER_USERNAME/taskflow-api:latest
+            echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
+            echo "Pushing $IMAGE:latest and $IMAGE:$SHA_TAG"
+            docker push "$IMAGE:latest"
+            docker push "$IMAGE:$SHA_TAG"
+
 
   # ==========================================
   # DEPLOY JOB - Tell Railway to redeploy
   # ==========================================
   deploy:
     docker:
-      - image: cimg/node:lts
+      - image: cimg/base:stable
     steps:
       - run:
-          name: Redeploy latest image on Railway
+          name: Check for Railway credentials
           command: |
-            echo "Asking Railway to redeploy the latest image..."
-            npx --yes @railway/cli redeploy --service "$RAILWAY_SERVICE_ID" --yes
-            echo "Railway is now pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
+            if [ -z "${RAILWAY_TOKEN:-}" ] || [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
+              echo "RAILWAY_TOKEN / RAILWAY_SERVICE_ID are not configured for this project."
+              echo "The image above is published to Docker Hub; ship it with one click:"
+              echo "  Railway dashboard -> service -> Deploys -> Redeploy latest image"
+              circleci-agent step halt
+            fi
+      - run:
+          name: Install the Railway CLI
+          command: |
+            # The npm package fetches its real binary in a postinstall script,
+            # which CI's script policy skips — that is why `npx @railway/cli`
+            # cannot work here. The official installer drops the binary directly.
+            bash <(curl -fsSL cli.new)
+            railway --version
+      - run:
+          name: Redeploy the published image
+          command: |
+            railway redeploy --service "$RAILWAY_SERVICE_ID" --yes
+            echo "Railway is pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
 
 
 workflows:
@@ -97,7 +198,14 @@ workflows:
       - build
       - publish:
           context: docker-hub
+          requires:
+            - build
+          filters:
+            branches:
+              only: main
       - deploy:
           requires:
             - publish
-
+          filters:
+            branches:
+              only: main

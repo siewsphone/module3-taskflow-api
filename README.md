@@ -152,11 +152,18 @@ reaches `main`):
 
 **`publish`** (only on `main`, only after `build` passes, so a failing change
 can never reach the registry): builds from the repository's `Dockerfile` via
-`setup_remote_docker` and pushes the `latest` tag.
+`setup_remote_docker` and pushes two tags: `latest` (the tag the Railway service
+tracks) and the short commit SHA, so a published image stays traceable to its
+commit after `latest` has moved on.
 
 **`deploy`** (after `publish`): asks Railway to pull the new image via the
-Railway CLI — see note 6 in [Notes and
-limitations](#notes-and-limitations) for its current state.
+Railway CLI, installed with Railway's own installer because the npm package's
+`postinstall` binary fetch is skipped by CI's script policy. Two variables —
+`RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID` — are needed for this job to do
+anything; while they are absent it prints what to do instead and halts
+**successfully** (`circleci-agent step halt`), so a missing credential reads as
+"not configured" rather than a red pipeline. See note 6 in [Notes and
+limitations](#notes-and-limitations).
 
 **Credentials are not in the repository.** `DOCKER_USERNAME` and
 `DOCKER_TOKEN` are read from a CircleCI **context** (`docker-hub`); the job
@@ -216,7 +223,13 @@ OPTIONS /api/tasks  (Origin: https://capable-licorice-a9c632.netlify.app)
 
 ![TaskFlow frontend on Netlify showing live tasks from the API](screenshots/frontend.png)
 
-*(Screenshot captured once the CORS build is live on Railway — see note 6.)*
+Captured from a real headless-browser session running on the Netlify origin
+against the live Railway API — not a mock-up: the list rendered from
+`GET /api/tasks`, a task was created through the form (`POST /api/tasks → 201`),
+then deleted through the UI (`DELETE /api/tasks/{id} → 200`). No CORS error, no
+console message, and the counters returned to their original state afterwards.
+That is the end-to-end proof that the preflight response above is what the
+deployed image really answers, not just what the local JAR answered.
 
 ### Option 5 — dependency security checks
 
@@ -297,6 +310,13 @@ watching the in-memory id counter: it kept climbing (same process) until it
 reset to 1, which only happens when the JVM restarts, and `/summary` returned 200
 from that moment on.
 
+One thing worth stating plainly: this endpoint **sends task titles to a
+third-party model**. `application.properties` points Spring AI at
+`https://openrouter.ai/api/v1`, so whatever is in the list is transmitted to that
+provider to produce the summary. That is acceptable for a demo with placeholder
+tasks, and it is the one part of this API that is not self-contained — do not put
+anything real in it.
+
 **2. `docker build` and `docker run` were not run on a local machine with a Docker
 daemon.** The environment where this README was prepared has the Docker CLI but
 no daemon. Both stages were verified separately (Maven build produced the JAR;
@@ -331,18 +351,33 @@ curl -X PUT http://localhost:8080/api/tasks/1 \
      -d '{"title":"Updated title","completed":false}'
 ```
 
-**6. The Railway image lags the pipeline by one manual click.**
-The Railway service pulls `siewsphone/taskflow-api:latest` from Docker Hub, and
-Railway does not re-pull on its own when CI pushes a new `latest`. The pipeline's
-`deploy` job tries to trigger the pull with
-`npx @railway/cli redeploy --service "$RAILWAY_SERVICE_ID" --yes`, but that step
-currently fails because the npm package downloads its real binary in a
-postinstall script, which CI's script policy skips — the CLI exits immediately
-with *"could not find the CLI binary"*. Until that step is fixed (install the
-Railway CLI via its own installer instead of `npx`, and provide
-`RAILWAY_TOKEN` + `RAILWAY_SERVICE_ID` as CircleCI environment variables), the
-current way to ship a published image is one click: **Railway dashboard →
-service → Deploys → Redploy latest image**. This is why the CORS build
-(published to Docker Hub by pipeline run
-[#5](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/5))
-is not yet served live: the image is published, the pull has not been triggered.
+**6. The Railway image lags the pipeline by one manual click — resolved, with one
+manual step left.**
+The Railway service pulls `siewsphone/taskflow-api:latest` from Docker Hub and
+does not re-pull on its own when CI pushes a new `latest`, so a published image
+is not live until something asks Railway to redeploy.
+
+That redeploy is now a working command rather than a broken one. The earlier
+`deploy` job called `npx @railway/cli`, which exits immediately with *"could not
+find the CLI binary"* because the npm package downloads its real binary from a
+`postinstall` script and CI's script policy skips it. The job now installs the
+CLI with Railway's own installer and gates on credentials: with
+`RAILWAY_TOKEN` + `RAILWAY_SERVICE_ID` present it runs
+`railway redeploy --service "$RAILWAY_SERVICE_ID" --yes`; with them absent it
+explains the manual path and halts **successfully**, so the workflow stays green
+and an unconfigured credential is not reported as a code failure. Those two
+variables are the remaining manual step for an unattended deploy.
+
+The CORS build is nevertheless **live**. The image published by pipeline run
+[#6](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/6)
+(`sha256:d76b8646…`, pushed 21 Oct) was pulled by Railway on 24 Oct 02:02 UTC,
+and the deployed instance now answers the preflight with
+`Access-Control-Allow-Origin: https://capable-licorice-a9c632.netlify.app`,
+`Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS` and
+`Access-Control-Max-Age: 1800`. The end-to-end check was run from a headless
+browser sitting on the Netlify origin: `GET /api/tasks → 200`,
+`POST /api/tasks → 201`, `DELETE /api/tasks/{id} → 200`, no console errors —
+see the screenshot in [Option 2](#option-2--frontend-on-netlify).
+
+Until the two Railway variables are set, shipping a new image is one click:
+**Railway dashboard → service → Deploys → Redeploy latest image**.
