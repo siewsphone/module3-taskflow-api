@@ -133,6 +133,66 @@ not a failure. Both screenshots are the Railway URL, unmodified.
 
 ---
 
+## Errors and failures
+
+The brief asks for what went wrong, in plain terms.
+
+**1. `docker build` / `docker run` were not executed on the authoring machine.**
+It has the Docker CLI but no daemon, so `docker build` cannot run there at all.
+Both stages were verified separately instead — Maven produced
+`target/taskflow-api-1.1.0.jar`, and that JAR was started on port 8080 and passed
+the 38-check endpoint sweep — and the real `docker build` + `docker push` runs in
+CI on every push to `main`. The local Docker command is the one step that was not
+run as written.
+
+**2. The first CI deploy job failed with `could not find the CLI binary`.**
+The job called `npx @railway/cli`, whose npm package downloads its real binary in
+a `postinstall` script that CI's script policy skips. Railway's own installer
+surfaced a second failure — it prompts
+`Install railway to ~/.railway/bin? [y/N]` and exits 1 on a non-interactive
+stdin. Fixed with `curl -fsSL cli.new | bash -s -- --yes`; the pipeline has been
+green since.
+
+**3. Three CI jobs reported success while doing nothing, because `halt` exits 0.**
+The worst failure of the exercise, and it was silent. The dependency scan, the Snyk
+gate and the deploy job each checked for a credential, printed instructions and called
+`circleci-agent step halt` when it was missing. A halted step exits **0**, so all three
+showed green. Consequences: the dependency scan had never actually scanned; the Snyk
+gate had never actually gated (it only began working after `SNYK_TOKEN` was added - and
+then immediately found 9 vulnerabilities); and the deploy had never actually deployed
+for several pipelines, because the project variable was spelled `RAILWAY_SERVIEC_ID`
+so the check for `RAILWAY_SERVICE_ID` never matched. The live service was running a
+build from before the dependency upgrades the whole time, while the pipeline said
+otherwise. Detected by comparing the live app against the pipeline: `/api/tasks` still
+served data that only survives when no redeploy happens, and the live response had none
+of the security headers the current commit adds. Fixed by making a missing deploy
+credential exit non-zero rather than halt, and by adding a post-deploy step that polls
+the live URL for a header that exists only in the current commit - so the job proves
+the container was replaced instead of trusting the redeploy command's exit code.
+Lesson: a failure that exits 0 is worse than a red build, because nobody looks at it.
+
+**4. A bodyless `PUT /api/tasks/{id}` returned 500 with a leaked method signature.**
+Found by the ZAP baseline scan, not by review. The catch-all handler returned
+`"Something went wrong: " + ex.getMessage()`, so a PUT with no body answered 500 with
+the controller's full signature on the wire:
+
+```
+"message":"Something went wrong: Required request body is missing: public
+org.springframework.http.ResponseEntity<sg.edu.ntu.taskflowapi.model.Task>
+sg.edu.ntu.taskflowapi.controller.TaskController.updateTask(java.lang.Long,
+sg.edu.ntu.taskflowapi.model.Task)"
+```
+
+Package names, class names, method and parameter types — a public response describing
+the server's internals, and the wrong status on top of it: a malformed request is a
+client error. Fixed in `GlobalExceptionHandler`: `HttpMessageNotReadableException` maps
+to **400** with fixed text, unknown routes to 404, and the catch-all logs the exception
+server-side and returns `"Internal server error"`. Nothing derived from an exception
+reaches a client any more.
+
+
+---
+
 ## Stretch goals
 
 Five stretch goals were completed. Each section below states what was built and links
@@ -473,102 +533,3 @@ trivy image --severity HIGH,CRITICAL siewsphone/taskflow-api:1.1.0
 
 Method, before/after results and the accepted warnings in full:
 [`SECURITY.md`](SECURITY.md).
-
----
-
-## Endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/tasks` | list all tasks |
-| GET | `/api/tasks/{id}` | fetch one task |
-| POST | `/api/tasks` | create a task → **201** |
-| PUT | `/api/tasks/{id}` | replace a task |
-| PUT | `/api/tasks/{id}/complete` | mark a task complete |
-| DELETE | `/api/tasks/{id}` | delete a task |
-| GET | `/api/tasks/summary` | AI-generated plain-English summary |
-| GET | `/api/tasks/version` | deployed build version from the JAR manifest |
-
-`/summary` is the one endpoint that is not self-contained: it sends the task
-titles to a third-party model (`https://openrouter.ai/api/v1`, configured in
-`application.properties`) to produce the summary. Fine for placeholder tasks;
-do not put anything real in this API. Task state itself is in memory, so it
-survives only as long as the container does.
-
----
-
-## Running without Docker
-
-```bash
-mvn spring-boot:run
-# or
-mvn clean package -DskipTests && java -jar target/*.jar
-```
-
-The frontend (optional):
-
-```bash
-cd frontend
-npm install
-npm run dev      # dev server on :5173, calls the live Railway API
-npm run build    # static site in frontend/dist, ready for Netlify
-```
-
----
-
-## Errors and failures
-
-The brief asks for what went wrong, in plain terms.
-
-**1. `docker build` / `docker run` were not executed on the authoring machine.**
-It has the Docker CLI but no daemon, so `docker build` cannot run there at all.
-Both stages were verified separately instead — Maven produced
-`target/taskflow-api-1.1.0.jar`, and that JAR was started on port 8080 and passed
-the 38-check endpoint sweep — and the real `docker build` + `docker push` runs in
-CI on every push to `main`. The local Docker command is the one step that was not
-run as written.
-
-**2. The first CI deploy job failed with `could not find the CLI binary`.**
-The job called `npx @railway/cli`, whose npm package downloads its real binary in
-a `postinstall` script that CI's script policy skips. Railway's own installer
-surfaced a second failure — it prompts
-`Install railway to ~/.railway/bin? [y/N]` and exits 1 on a non-interactive
-stdin. Fixed with `curl -fsSL cli.new | bash -s -- --yes`; the pipeline has been
-green since.
-
-**3. Three CI jobs reported success while doing nothing, because `halt` exits 0.**
-The worst failure of the exercise, and it was silent. The dependency scan, the Snyk
-gate and the deploy job each checked for a credential, printed instructions and called
-`circleci-agent step halt` when it was missing. A halted step exits **0**, so all three
-showed green. Consequences: the dependency scan had never actually scanned; the Snyk
-gate had never actually gated (it only began working after `SNYK_TOKEN` was added - and
-then immediately found 9 vulnerabilities); and the deploy had never actually deployed
-for several pipelines, because the project variable was spelled `RAILWAY_SERVIEC_ID`
-so the check for `RAILWAY_SERVICE_ID` never matched. The live service was running a
-build from before the dependency upgrades the whole time, while the pipeline said
-otherwise. Detected by comparing the live app against the pipeline: `/api/tasks` still
-served data that only survives when no redeploy happens, and the live response had none
-of the security headers the current commit adds. Fixed by making a missing deploy
-credential exit non-zero rather than halt, and by adding a post-deploy step that polls
-the live URL for a header that exists only in the current commit - so the job proves
-the container was replaced instead of trusting the redeploy command's exit code.
-Lesson: a failure that exits 0 is worse than a red build, because nobody looks at it.
-
-**4. A bodyless `PUT /api/tasks/{id}` returned 500 with a leaked method signature.**
-Found by the ZAP baseline scan, not by review. The catch-all handler returned
-`"Something went wrong: " + ex.getMessage()`, so a PUT with no body answered 500 with
-the controller's full signature on the wire:
-
-```
-"message":"Something went wrong: Required request body is missing: public
-org.springframework.http.ResponseEntity<sg.edu.ntu.taskflowapi.model.Task>
-sg.edu.ntu.taskflowapi.controller.TaskController.updateTask(java.lang.Long,
-sg.edu.ntu.taskflowapi.model.Task)"
-```
-
-Package names, class names, method and parameter types — a public response describing
-the server's internals, and the wrong status on top of it: a malformed request is a
-client error. Fixed in `GlobalExceptionHandler`: `HttpMessageNotReadableException` maps
-to **400** with fixed text, unknown routes to 404, and the catch-all logs the exception
-server-side and returns `"Internal server error"`. Nothing derived from an exception
-reaches a client any more.
