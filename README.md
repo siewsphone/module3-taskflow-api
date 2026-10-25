@@ -1,6 +1,6 @@
 # TaskFlow API — Module 4: Dockerize & Deploy
 
-**Live application:** <a href="https://module3-taskflow-api-production.up.railway.app/api/tasks" target="_blank" rel="noopener noreferrer">https://module3-taskflow-api-production.up.railway.app/api/tasks</a>
+**Live application:** <https://module3-taskflow-api-production.up.railway.app/api/tasks>
 
 A Spring Boot 4 REST API for managing tasks, containerized with a multi-stage
 Dockerfile and deployed to Railway.
@@ -15,7 +15,7 @@ Dockerfile and deployed to Railway.
 
 | | |
 |---|---|
-| **Live URL** | <a href="https://module3-taskflow-api-production.up.railway.app/api/tasks" target="_blank" rel="noopener noreferrer">https://module3-taskflow-api-production.up.railway.app/api/tasks</a> |
+| **Live URL** | <https://module3-taskflow-api-production.up.railway.app/api/tasks> |
 | **Platform** | Railway (region: Southeast Asia, 1 replica) |
 | **Runtime** | Java 21 (`java@21.0.12`) |
 | **Source** | Docker image `siewsphone/taskflow-api:latest`, built and published by the CircleCI pipeline below; Railway runs that image |
@@ -185,19 +185,19 @@ Docker Hub access token with Read & Write scope, never the account password.
 
 | | |
 |---|---|
-| Pipeline runs (build → publish → deploy, newest first) | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api" target="_blank" rel="noopener noreferrer">https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api</a> (run **#11** is the latest green one) |
-| Image on Docker Hub | <a href="https://hub.docker.com/r/siewsphone/taskflow-api" target="_blank" rel="noopener noreferrer">https://hub.docker.com/r/siewsphone/taskflow-api</a> |
+| Pipeline runs (build → publish → deploy, newest first) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api> (run **#11** is the latest green one) |
+| Image on Docker Hub | <https://hub.docker.com/r/siewsphone/taskflow-api> |
 
 ### Option 2 — Frontend on Netlify
 
-**Live frontend: <a href="https://ntu-taskflow.netlify.app" target="_blank" rel="noopener noreferrer">https://ntu-taskflow.netlify.app</a>**
+**Live frontend: <https://ntu-taskflow.netlify.app>**
 
 A small React single-page app that consumes the deployed TaskFlow API — no
 local backend, every call goes to the live Railway URL.
 
 | | |
 |---|---|
-| **Frontend URL** | <a href="https://ntu-taskflow.netlify.app" target="_blank" rel="noopener noreferrer">https://ntu-taskflow.netlify.app</a> |
+| **Frontend URL** | <https://ntu-taskflow.netlify.app> |
 | **Hosted on** | Netlify (static build of `frontend/`, folder `frontend/` in this repo) |
 | **Stack** | Vite + React 19, state via Context + `useReducer` |
 | **API calls** | `GET /api/tasks`, `POST /api/tasks`, `PUT /api/tasks/{id}/complete`, `PUT /api/tasks/{id}`, `DELETE /api/tasks/{id}` |
@@ -275,8 +275,8 @@ run that produced it:
 
 | Version | Pipeline | Commit |
 |---|---|---|
-| `1.0.0` | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/9" target="_blank" rel="noopener noreferrer">#9</a> | `3113023` |
-| `1.1.0` | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/10" target="_blank" rel="noopener noreferrer">#10</a> | `21f4efe` |
+| `1.0.0` | [#9](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/9) | `3113023` |
+| `1.1.0` | [#10](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/10) | `21f4efe` |
 
 **Verifiable at runtime.** That new endpoint reads the version from the JAR
 manifest (the Spring Boot plugin copies the Maven version into it), so a
@@ -310,7 +310,7 @@ re-scan reports **0 findings**, and the full 38-check endpoint sweep still passe
 on the rebuilt application.
 
 Full detail — method, before/after results, the tooling detour, and the
-container-scan gap — is in <a href="SECURITY.md" target="_blank" rel="noopener noreferrer">`SECURITY.md`</a>.
+container-scan gap — is in [`SECURITY.md`](SECURITY.md).
 
 The scan is reproducible rather than a one-off, and both checks now run on every
 push to `main`:
