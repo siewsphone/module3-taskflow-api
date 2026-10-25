@@ -266,6 +266,52 @@ its siblings stay behind:
 No `--severity-threshold` was raised and no finding was ignored to make the gate
 pass. The override moves the versions; the next pipeline run re-scans and decides.
 
+## OSV-Scanner result
+
+`.github/workflows/osv-scanner.yml` ran on push to `main` (Google's reusable
+workflow, pinned by commit SHA):
+
+```
+Scanned pom.xml                       and found 5 packages
+Scanned frontend/package-lock.json    and found 115 packages
+No issues found
+```
+
+Zero code-scanning alerts followed from the SARIF upload. Note what it scanned: **115
+npm packages as well as the 5 Maven ones**, which none of the Java scanners see. The
+frontend is served by Netlify, but its lockfile lives in this repository, so its
+dependencies ship from this repository too.
+
+## ZAP baseline result
+
+`.github/workflows/zap-baseline.yml` ran against the deployed app
+(`…railway.app/api/tasks`), 6 URLs crawled:
+
+```
+FAIL-NEW: 0   WARN-NEW: 6   INFO: 0   IGNORE: 0   PASS: 62
+```
+
+Nothing failed, and 62 rules passed — no cookie flags to set, no CSRF, no serialization
+issues, no version disclosure. The six warnings, and what was done about each:
+
+| Rule | Finding | Action |
+|---|---|---|
+| 10021 | `X-Content-Type-Options` missing | added by `SecurityHeadersFilter` |
+| 10035 | `Strict-Transport-Security` not set (x5) | added, `max-age=31536000` |
+| 90004 | `Cross-Origin-Resource-Policy` missing | added, `cross-origin` — `same-origin` would break the Netlify frontend |
+| 10015 | cache-control directives | `Cache-Control: no-store`, correct for live data |
+| 90022 | Application Error Disclosure (x4) | `server.error.*` set to `never` / `false` |
+| 10049 | Non-Storable Content (x5) | inherent to `no-store`; accepted, not a defect |
+
+The first five are fixed in `SecurityHeadersFilter` and `application.properties`; the
+sixth is a side effect of the fix and the scan will keep reporting it, which is honest
+rather than a problem to suppress. The job is `fail_action: false` by design (a
+watchdog reports, a gate blocks — Snyk is the gate), so these never block a release.
+
+This is the value of DAST over the other four checks: Snyk, OSV, Dependency-Check and
+Trivy all read files. None of them can tell you that the running service omits HTTP
+security headers, because that only exists in a response.
+
 ## Container scan: detection, then fix
 
 The container scan is only worth having if it can be shown to catch things, so it
