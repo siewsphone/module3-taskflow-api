@@ -1,0 +1,17 @@
+name: osv-scanner
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "30 1 * * 1"   # every Monday 01:30 UTC (09:30 Singapore)
+  workflow_dispatch:       # adds a "Run workflow" button
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  osv-scan:
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
