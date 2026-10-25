@@ -28,7 +28,10 @@
       the matched artifact is the runtime stdlib, which does not contain that code.
       OSV, Snyk and Trivy all report no advisory for this artifact.
     ]]></notes>
-    <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/kotlin-stdlib@.*$</packageUrl>
+    <!-- The whole group, not one artifact: Dependency-Check matches the CPE
+         jetbrains:kotlin, so every Kotlin jar in the tree inherits the same advisory.
+         Listing artifacts one at a time just meant kotlin-reflect turned up next. -->
+    <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/[^/]+@.*$</packageUrl>
     <cve>CVE-2026-53914</cve>
   </suppress>
 
@@ -45,18 +48,6 @@
     ]]></notes>
     <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/kotlin-stdlib-common@.*$</packageUrl>
     <cve>CVE-2020-29582</cve>
-  </suppress>
-
-  <!--
-    kotlin-stdlib-common inherits the same build-cache advisory; same reasoning as the
-    first entry, and the same corroboration from OSV, Snyk and Trivy.
-  -->
-  <suppress>
-    <notes><![CDATA[
-      Same build-cache advisory as kotlin-stdlib, matched by CPE against a runtime jar.
-    ]]></notes>
-    <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/kotlin-stdlib-common@.*$</packageUrl>
-    <cve>CVE-2026-53914</cve>
   </suppress>
 
 </suppressions>
