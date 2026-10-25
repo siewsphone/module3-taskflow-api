@@ -180,7 +180,8 @@ rather than halts when either is missing: a deployment job that deploys nothing 
 not report success. It then **proves the rollout landed** by polling the live URL for
 a header that only exists in the current commit, so "deployed" is a measured fact and
 not the exit code of a redeploy command. See
-[Errors and failures](#errors-and-failures) item 3 for what that false green cost.
+[`SECURITY.md`](SECURITY.md#a-false-green-and-what-it-cost) for what that false green
+cost.
 
 **Two more jobs run alongside**, both described in
 [Option 5](#option-5--security-checks): `snyk_scan` + `snyk_code` gate `publish`, and
