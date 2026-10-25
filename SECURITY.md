@@ -346,6 +346,20 @@ HIGH:     0
 
 Detection and remediation, both evidenced by a run rather than asserted in prose.
 
+## A false green, and what it cost
+
+Worth recording because it is a security failure mode, not just a CI bug. `snyk_scan`,
+`dependency-scan` and the deploy job all halted when a credential was missing, and
+`circleci-agent step halt` exits **0**. Green jobs that ran no scan are worse than red
+ones: the CRITICAL in `tomcat-embed-websocket` and the nine findings Snyk reported were
+sitting there while three pipelines showed the security stage passing. The deploy job
+halted too - `RAILWAY_SERVIEC_ID` was spelled wrong, so `RAILWAY_SERVICE_ID` never
+matched - which means the running container was older than the fixes in this document.
+
+Every check in this file is now backed by a run whose output was read, not by a status
+badge. The deploy job asserts the rollout by polling for a header that only exists in
+the commit that added it, so "deployed" is a measured fact rather than an exit code.
+
 ## Known remaining issues
 
 **1. The Snyk gate reports what Snyk reports.** `SNYK_TOKEN` is configured as a

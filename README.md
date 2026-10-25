@@ -424,7 +424,25 @@ surfaced a second failure — it prompts
 stdin. Fixed with `curl -fsSL cli.new | bash -s -- --yes`; the pipeline has been
 green since.
 
-**3. A bodyless `PUT /api/tasks/{id}` returns 500, not 400.**
+**3. Three CI jobs reported success while doing nothing, because `halt` exits 0.**
+The worst failure of the exercise, and it was silent. The dependency scan, the Snyk
+gate and the deploy job each checked for a credential, printed instructions and called
+`circleci-agent step halt` when it was missing. A halted step exits **0**, so all three
+showed green. Consequences: the dependency scan had never actually scanned; the Snyk
+gate had never actually gated (it only began working after `SNYK_TOKEN` was added - and
+then immediately found 9 vulnerabilities); and the deploy had never actually deployed
+for several pipelines, because the project variable was spelled `RAILWAY_SERVIEC_ID`
+so the check for `RAILWAY_SERVICE_ID` never matched. The live service was running a
+build from before the dependency upgrades the whole time, while the pipeline said
+otherwise. Detected by comparing the live app against the pipeline: `/api/tasks` still
+served data that only survives when no redeploy happens, and the live response had none
+of the security headers the current commit adds. Fixed by making a missing deploy
+credential exit non-zero rather than halt, and by adding a post-deploy step that polls
+the live URL for a header that exists only in the current commit - so the job proves
+the container was replaced instead of trusting the redeploy command's exit code.
+Lesson: a failure that exits 0 is worse than a red build, because nobody looks at it.
+
+**4. A bodyless `PUT /api/tasks/{id}` returns 500, not 400.**
 The handler takes `@RequestBody`, so a request with no body is rejected before it
 reaches the service, and Module 3 specified no field validation that would turn
 that into a 400. It is a malformed request, not a server fault — send a JSON body
