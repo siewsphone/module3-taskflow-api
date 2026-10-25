@@ -415,3 +415,26 @@ nothing to test in that direction because there is no login surface to probe.
 `brotli-libs` inside the JRE image. `apk upgrade` handles it today, but a
 digest-pinned base image will keep surfacing new CVEs as they are published — which
 is exactly why that job runs on every publish rather than once.
+
+---
+
+## Other failures worth recording
+
+Kept here because the README ends at Option 5. The false green above and the error
+disclosure found by ZAP are documented in their own sections; these two are the rest.
+
+**1. `docker build` / `docker run` were not executed on the authoring machine.**
+It has the Docker CLI but no daemon, so `docker build` cannot run there at all.
+Both stages were verified separately instead — Maven produced
+`target/taskflow-api-1.1.0.jar`, and that JAR was started on port 8080 and passed
+the 38-check endpoint sweep — and the real `docker build` + `docker push` runs in
+CI on every push to `main`. The local Docker command is the one step that was not
+run as written.
+
+**2. The first CI deploy job failed with `could not find the CLI binary`.**
+The job called `npx @railway/cli`, whose npm package downloads its real binary in
+a `postinstall` script that CI's script policy skips. Railway's own installer
+surfaced a second failure — it prompts
+`Install railway to ~/.railway/bin? [y/N]` and exits 1 on a non-interactive
+stdin. Fixed with `curl -fsSL cli.new | bash -s -- --yes`; the pipeline has been
+green since.
