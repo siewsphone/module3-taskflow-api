@@ -1,6 +1,6 @@
 # TaskFlow API — Module 4: Dockerize & Deploy
 
-**Live application:** <https://module3-taskflow-api-production.up.railway.app/api/tasks>
+**Live application:** <a href="https://module3-taskflow-api-production.up.railway.app/api/tasks" target="_blank" rel="noopener noreferrer">https://module3-taskflow-api-production.up.railway.app/api/tasks</a>
 
 A Spring Boot 4 REST API for managing tasks, containerized with a multi-stage
 Dockerfile and deployed to Railway.
@@ -15,7 +15,7 @@ Dockerfile and deployed to Railway.
 
 | | |
 |---|---|
-| **Live URL** | <https://module3-taskflow-api-production.up.railway.app/api/tasks> |
+| **Live URL** | <a href="https://module3-taskflow-api-production.up.railway.app/api/tasks" target="_blank" rel="noopener noreferrer">https://module3-taskflow-api-production.up.railway.app/api/tasks</a> |
 | **Platform** | Railway (region: Southeast Asia, 1 replica) |
 | **Runtime** | Java 21 (`java@21.0.12`) |
 | **Source** | Docker image `siewsphone/taskflow-api:latest`, built and published by the CircleCI pipeline below; Railway runs that image |
@@ -70,11 +70,11 @@ The first build takes a few minutes while Maven downloads dependencies.
 
 > **Verification note.** Both stages of the Dockerfile were verified
 > individually: `mvn clean package -DskipTests` was run and produced
-> `target/taskflow-api-0.0.1-SNAPSHOT.jar`, and that JAR was then started with
+> `target/taskflow-api-1.1.0.jar`, and that JAR was then started with
 > `java -jar` on port 8080 and exercised with the full endpoint sweep below —
 > which is exactly what Stage 2 does. The `docker build` / `docker run` commands
-> themselves run in the CI pipeline (see Stretch goal, Option 1); see
-> [Notes and limitations](#notes-and-limitations).
+> themselves run in the CI pipeline on every push to `main` (Stretch goal,
+> Option 1), which is a real Docker daemon executing the real `Dockerfile`.
 
 ---
 
@@ -173,8 +173,10 @@ Railway CLI, installed with Railway's own installer because the npm package's
 `RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID` — are needed for this job to do
 anything; while they are absent it prints what to do instead and halts
 **successfully** (`circleci-agent step halt`), so a missing credential reads as
-"not configured" rather than a red pipeline. See note 6 in [Notes and
-limitations](#notes-and-limitations).
+"not configured" rather than a red pipeline. Those two variables are the one
+remaining manual step; until they are set, shipping a new image is one click on
+**Railway → service → Deploys → Redeploy latest image**, because the Railway
+service does not re-pull `latest` on its own when CI pushes a new one.
 
 **Credentials are not in the repository.** `DOCKER_USERNAME` and
 `DOCKER_TOKEN` are read from a CircleCI **context** (`docker-hub`); the job
@@ -183,19 +185,19 @@ Docker Hub access token with Read & Write scope, never the account password.
 
 | | |
 |---|---|
-| Pipeline runs (build → publish → deploy, newest first) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api> (run **#11** is the latest green one) |
-| Image on Docker Hub | <https://hub.docker.com/r/siewsphone/taskflow-api> |
+| Pipeline runs (build → publish → deploy, newest first) | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api" target="_blank" rel="noopener noreferrer">https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api</a> (run **#11** is the latest green one) |
+| Image on Docker Hub | <a href="https://hub.docker.com/r/siewsphone/taskflow-api" target="_blank" rel="noopener noreferrer">https://hub.docker.com/r/siewsphone/taskflow-api</a> |
 
 ### Option 2 — Frontend on Netlify
 
-**Live frontend: <https://ntu-taskflow.netlify.app>**
+**Live frontend: <a href="https://ntu-taskflow.netlify.app" target="_blank" rel="noopener noreferrer">https://ntu-taskflow.netlify.app</a>**
 
 A small React single-page app that consumes the deployed TaskFlow API — no
 local backend, every call goes to the live Railway URL.
 
 | | |
 |---|---|
-| **Frontend URL** | <https://ntu-taskflow.netlify.app> |
+| **Frontend URL** | <a href="https://ntu-taskflow.netlify.app" target="_blank" rel="noopener noreferrer">https://ntu-taskflow.netlify.app</a> |
 | **Hosted on** | Netlify (static build of `frontend/`, folder `frontend/` in this repo) |
 | **Stack** | Vite + React 19, state via Context + `useReducer` |
 | **API calls** | `GET /api/tasks`, `POST /api/tasks`, `PUT /api/tasks/{id}/complete`, `PUT /api/tasks/{id}`, `DELETE /api/tasks/{id}` |
@@ -273,8 +275,8 @@ run that produced it:
 
 | Version | Pipeline | Commit |
 |---|---|---|
-| `1.0.0` | [#9](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/9) | `3113023` |
-| `1.1.0` | [#10](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/10) | `21f4efe` |
+| `1.0.0` | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/9" target="_blank" rel="noopener noreferrer">#9</a> | `3113023` |
+| `1.1.0` | <a href="https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/10" target="_blank" rel="noopener noreferrer">#10</a> | `21f4efe` |
 
 **Verifiable at runtime.** That new endpoint reads the version from the JAR
 manifest (the Spring Boot plugin copies the Maven version into it), so a
@@ -308,7 +310,7 @@ re-scan reports **0 findings**, and the full 38-check endpoint sweep still passe
 on the rebuilt application.
 
 Full detail — method, before/after results, the tooling detour, and the
-container-scan gap — is in [`SECURITY.md`](SECURITY.md).
+container-scan gap — is in <a href="SECURITY.md" target="_blank" rel="noopener noreferrer">`SECURITY.md`</a>.
 
 The scan is reproducible rather than a one-off, and both checks now run on every
 push to `main`:
@@ -339,6 +341,12 @@ history, not the working tree.
 | GET | `/api/tasks/summary` | AI-generated plain-English summary |
 | GET | `/api/tasks/version` | deployed build version from the JAR manifest |
 
+`/summary` is the one endpoint that is not self-contained: it sends the task
+titles to a third-party model (`https://openrouter.ai/api/v1`, configured in
+`application.properties`) to produce the summary. Fine for placeholder tasks;
+do not put anything real in this API. Task state itself is in memory, so it
+survives only as long as the container does.
+
 ---
 
 ## Running without Docker
@@ -360,105 +368,28 @@ npm run build    # static site in frontend/dist, ready for Netlify
 
 ---
 
-## Notes and limitations
+## Errors and failures
 
-**1. `/api/tasks/summary` returns 500 on the live deployment.**
-The summary endpoint calls a language model through Spring AI
-(`spring.ai.openai.api-key=${OPENAI_API_KEY}`). No `OPENAI_API_KEY` variable is
-set on the Railway service, so the outbound call is made without credentials and
-the provider replies `401: Missing Authentication header`, which the global
-exception handler surfaces as a 500.
+The brief asks for what went wrong, in plain terms.
 
-The fix is configuration, not code: add `OPENAI_API_KEY` under
-**Railway → service → Variables**. The endpoint works locally, where the variable
-is set — it returned
-`Pending: Buy groceries. Completed: Finish Module 4 Dockerfile.`
+**1. `docker build` / `docker run` were not executed on the authoring machine.**
+It has the Docker CLI but no daemon, so `docker build` cannot run there at all.
+Both stages were verified separately instead — Maven produced
+`target/taskflow-api-1.1.0.jar`, and that JAR was started on port 8080 and passed
+the 38-check endpoint sweep — and the real `docker build` + `docker push` runs in
+CI on every push to `main`. The local Docker command is the one step that was not
+run as written.
 
-Worth noting the good part of this failure: the error came back as the standard
-JSON error shape with **no stack trace exposed**, which is exactly what the
-central exception handler is for.
+**2. The first CI deploy job failed with `could not find the CLI binary`.**
+The job called `npx @railway/cli`, whose npm package downloads its real binary in
+a `postinstall` script that CI's script policy skips. Railway's own installer
+surfaced a second failure — it prompts
+`Install railway to ~/.railway/bin? [y/N]` and exits 1 on a non-interactive
+stdin. Fixed with `curl -fsSL cli.new | bash -s -- --yes`; the pipeline has been
+green since.
 
-**Resolved.** `OPENAI_API_KEY` is now set on the Railway service and the endpoint
-returns **200** against the live URL, with a real model-generated summary:
-
-> The pending task is to buy groceries. The completed task is finishing the
-> Module 4 Dockerfile.
-
-One operational detail worth recording: adding a variable to a Railway service
-triggers a **redeploy**, and the old container keeps serving until that finishes —
-so the change is not live the instant you save it. I confirmed the switchover by
-watching the in-memory id counter: it kept climbing (same process) until it
-reset to 1, which only happens when the JVM restarts, and `/summary` returned 200
-from that moment on.
-
-One thing worth stating plainly: this endpoint **sends task titles to a
-third-party model**. `application.properties` points Spring AI at
-`https://openrouter.ai/api/v1`, so whatever is in the list is transmitted to that
-provider to produce the summary. That is acceptable for a demo with placeholder
-tasks, and it is the one part of this API that is not self-contained — do not put
-anything real in it.
-
-**2. `docker build` and `docker run` were not run on a local machine with a Docker
-daemon.** The environment where this README was prepared has the Docker CLI but
-no daemon. Both stages were verified separately (Maven build produced the JAR;
-the JAR was run on port 8080 and passed the full endpoint sweep), and the same
-`docker build` + `docker push` path now runs green in the CircleCI `publish`
-job on every push to `main`.
-
-**3. Task state is in-memory.**
-Tasks live in a `TaskRepository` backed by a list, not a database, so they are
-lost when the container restarts or Railway redeploys. That is expected for
-Module 3's scope — no database was part of the brief.
-
-**4. Ids are never reused.**
-The repository increments an internal counter that is not reset on delete, so
-after emptying the store the next id continues from the counter rather than
-returning to 1. This is deliberate — a client holding id 1 can never be handed a
-different task — but it means the server's history, not its current contents,
-decides the next id.
-
-**5. A bodyless `PUT` returns 500, not 400.**
-`PUT /api/tasks/{id}` takes `@RequestBody`, so a request sent without a body is
-rejected before it ever reaches the service. Module 3 specified no field
-validation, so there is no `@Valid` / `BindingResult` path that would turn this
-into a 400 — the catch-all handler reports it as a 500. Worth knowing when
-testing by hand (and in Postman, where an empty body is easy to send by
-accident), because it looks like a server fault when it is a malformed request.
-Send a JSON body with `Content-Type: application/json`:
-
-```
-curl -X PUT http://localhost:8080/api/tasks/1 \
-     -H 'Content-Type: application/json' \
-     -d '{"title":"Updated title","completed":false}'
-```
-
-**6. The Railway image lags the pipeline by one manual click — resolved, with one
-manual step left.**
-The Railway service pulls `siewsphone/taskflow-api:latest` from Docker Hub and
-does not re-pull on its own when CI pushes a new `latest`, so a published image
-is not live until something asks Railway to redeploy.
-
-That redeploy is now a working command rather than a broken one. The earlier
-`deploy` job called `npx @railway/cli`, which exits immediately with *"could not
-find the CLI binary"* because the npm package downloads its real binary from a
-`postinstall` script and CI's script policy skips it. The job now installs the
-CLI with Railway's own installer and gates on credentials: with
-`RAILWAY_TOKEN` + `RAILWAY_SERVICE_ID` present it runs
-`railway redeploy --service "$RAILWAY_SERVICE_ID" --yes`; with them absent it
-explains the manual path and halts **successfully**, so the workflow stays green
-and an unconfigured credential is not reported as a code failure. Those two
-variables are the remaining manual step for an unattended deploy.
-
-The CORS build is nevertheless **live**. The image published by pipeline run
-[#6](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/6)
-(`sha256:d76b8646…`, pushed 21 Oct) was pulled by Railway on 24 Oct 02:02 UTC,
-and the deployed instance now answers the preflight with
-`Access-Control-Allow-Origin: https://ntu-taskflow.netlify.app`,
-`Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS` and
-`Access-Control-Max-Age: 1800`. The end-to-end check was run from a headless
-browser sitting on the Netlify origin: `GET /api/tasks → 200`,
-`POST /api/tasks → 201`, `DELETE /api/tasks/{id} → 200`, no console errors —
-see the screenshot in [Option 2](#option-2--frontend-on-netlify).
-
-Until the two Railway variables are set, shipping a new image is one click:
-**Railway dashboard → service → Deploys → Redeploy latest image**.
+**3. A bodyless `PUT /api/tasks/{id}` returns 500, not 400.**
+The handler takes `@RequestBody`, so a request with no body is rejected before it
+reaches the service, and Module 3 specified no field validation that would turn
+that into a 400. It is a malformed request, not a server fault — send a JSON body
+with `Content-Type: application/json`.
