@@ -221,6 +221,35 @@ NVD_API_KEY=... mvn verify -Psecurity -DskipTests
 mvn dependency:list -DincludeScope=runtime -DoutputFile=deps.txt
 ```
 
+## What the Snyk gate found on its first real run
+
+Once `SNYK_TOKEN` was configured, `snyk_scan` stopped halting and scanned for real:
+**123 dependencies, 9 issues, 9 vulnerable paths** — and the gate did its job, which
+is why `publish` did not run:
+
+| Package | Version found | Severity | Count |
+|---|---|---|---|
+| `io.netty:netty-codec-http` | 4.2.17.Final | HIGH | 1 |
+| `io.netty:netty-codec-classes-quic` | 4.2.17.Final | HIGH | 1 |
+| `io.netty:netty-codec-http3` | 4.2.17.Final | HIGH | 5 |
+| `org.apache.tomcat.embed:tomcat-embed-websocket` | 11.0.25 | HIGH + **CRITICAL** | 2 |
+
+Every one is **transitive**: none of those packages appears in `pom.xml`, so a diff
+review would never have caught them. That is precisely the argument for a dependency
+gate rather than a careful reading of the POM.
+
+Remediation, all via the property names Spring Boot's own `dependencyManagement`
+reads, so each line's artifacts move together instead of one jar being pinned while
+its siblings stay behind:
+
+- `spring-boot-starter-parent` 4.1.1 → **4.1.2**
+- `tomcat.version` 11.0.25 → **11.0.27** (fixes the CRITICAL authentication bypass)
+- `netty.version` → **4.2.19.Final** (new property; upstream from 4.2.17.Final)
+- `spring-ai.version` 2.0.0 → **2.0.2** (Snyk's flagged starter)
+
+No `--severity-threshold` was raised and no finding was ignored to make the gate
+pass. The override moves the versions; the next pipeline run re-scans and decides.
+
 ## Container scan result
 
 The `container-scan` job runs Trivy over the published image after every publish.
