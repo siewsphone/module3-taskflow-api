@@ -172,7 +172,7 @@ Docker Hub access token with Read & Write scope, never the account password.
 
 | | |
 |---|---|
-| Pipeline run (green, publishes the current image) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/5> |
+| Pipeline runs (build → publish → deploy, newest first) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api> (run **#11** is the latest green one) |
 | Image on Docker Hub | <https://hub.docker.com/r/siewsphone/taskflow-api> |
 
 ### Option 2 — Frontend on Netlify
@@ -256,6 +256,14 @@ identifies the binary you are actually looking at.
 SemVer as practised here: MAJOR for breaking API changes, MINOR for new
 endpoints, PATCH for fixes. `1.0.0` was the first release; `1.1.0` added
 `GET /api/tasks/version`.
+
+Each version came from a green pipeline run, so the tag is reproducible from the
+run that produced it:
+
+| Version | Pipeline | Commit |
+|---|---|---|
+| `1.0.0` | [#9](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/9) | `3113023` |
+| `1.1.0` | [#10](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/10) | `21f4efe` |
 
 **Verifiable at runtime.** That new endpoint reads the version from the JAR
 manifest (the Spring Boot plugin copies the Maven version into it), so a
