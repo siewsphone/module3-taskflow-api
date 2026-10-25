@@ -318,8 +318,18 @@ FAIL-NEW: 0   WARN-NEW: 3   INFO: 0   IGNORE: 0   PASS: 65
 for a bodyless PUT that meant the controller's full Java signature in a public 500
 response — package names, method and parameter types. Fixed by returning fixed text and
 mapping `HttpMessageNotReadableException` to 400, which also corrects the status code.
-10015 and 10049 are both consequences of `Cache-Control: no-store` on live data; they
-are deliberate and documented rather than suppressed. The job is `fail_action: false` by design (a
+The second re-run, after the handler fix, closed 90022 as well:
+
+```
+WARN-NEW: Re-examine Cache-control Directives [10015] x 1
+WARN-NEW: Non-Storable Content [10049] x 5
+FAIL-NEW: 0   WARN-NEW: 2   INFO: 0   IGNORE: 0   PASS: 66
+```
+
+6 -> 3 -> 2 over two runs, PASS 62 -> 66, and 0 failures throughout. Both survivors are
+consequences of `Cache-Control: no-store` on live data: correct for an in-memory store,
+so the header stays and the warnings are documented rather than suppressed with a ZAP
+rules override. A scanner you have taught to ignore things stops being a scanner. The job is `fail_action: false` by design (a
 watchdog reports, a gate blocks — Snyk is the gate), so these never block a release.
 
 This is the value of DAST over the other four checks: Snyk, OSV, Dependency-Check and
