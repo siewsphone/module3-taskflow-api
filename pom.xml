@@ -115,4 +115,41 @@
     </build>
 
 
+    <profiles>
+    <!--
+      Option 5 - OWASP Dependency-Check, the tool named in the assignment brief.
+      Kept out of the default build because the first run syncs the NVD feed
+      (~250 MB); it belongs in its own CI job with a cache, not in every
+      `mvn verify`. Run it by hand with:
+
+        ./mvnw verify -Psecurity -DnvdApiKey=$NVD_API_KEY
+    -->
+    <profile>
+      <id>security</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <version>12.1.3</version>
+            <configuration>
+              <failBuildOnCVSS>7</failBuildOnCVSS>
+              <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+              <formats>
+                <format>HTML</format>
+                <format>JSON</format>
+              </formats>
+            </configuration>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    </profiles>
 </project>

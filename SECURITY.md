@@ -28,6 +28,7 @@ the pipeline runs all four:
 | **OSV-Scanner** | SCA | **Watchdog** — weekly re-scan of unchanged code | 4.14 |
 | **OWASP ZAP** baseline | DAST | **Watchdog** — inspects the deployed app's responses | 4.14 |
 | **Trivy** (`container-scan`) | Container | **Watchdog** — scans the image that actually ships | 4.13/4.14 |
+| **OWASP Dependency-Check** (`dependency-scan`) | SCA | **Watchdog** — the tool named in the brief | brief |
 
 The distinction matters and the lessons make it explicit: **gates** stop a release,
 **watchdogs** report and keep watching. Snyk is the gate because it runs on every
@@ -35,22 +36,27 @@ push and blocks `publish`; OSV-Scanner and ZAP run on a schedule as well, becaus
 a CVE can be published against a dependency you have not touched since the last
 scan, and ZAP can only see how the app behaves while it is running.
 
-**One deviation, stated plainly.** The assignment brief names *OWASP
-Dependency-Check*, which neither lesson teaches. It was tried first and fails
-without an NVD API key:
+**On OWASP Dependency-Check specifically.** The brief names it; Lessons 4.13 and
+4.14 do not teach it. Rather than choose, both are wired up: the taught stack runs
+on every push, and Dependency-Check runs as its own job behind the `security` Maven
+profile. It needs an NVD API key — without one the feed sync is rate-limited to the
+point of uselessness, which is what the original attempt hit:
 
 ```
 UpdateException: Error updating the NVD Data
   caused by NvdApiException: Invalid API Key, length of 0 too short to provided a masked partial key
-NoDataException: No documents exist
 ```
 
-The findings below were therefore produced with **OSV.dev**, which is the SCA
-source behind OSV-Scanner that Lesson 4.14 teaches — key-free and aggregating the
-same upstream advisories (GitHub Security Advisories, CVE records). If the brief's
-literal tool is what a marker looks for, `mvn org.owasp:dependency-check-maven:check`
-with `NVD_API_KEY` exported runs it; it is not part of the pipeline because it
-cannot run there without the key.
+With `NVD_API_KEY` set as a project environment variable the job syncs the feed,
+caches it (it is ~250 MB), and fails the job on any finding at CVSS 7 or above. It
+is a watchdog, not a gate: `publish` does not require it, so a new CVE against an
+unchanged dependency shows up as a red job without silently blocking a release the
+Snyk gate already approved.
+
+The findings recorded in this document were produced with **OSV.dev**, the data
+source behind the OSV-Scanner that Lesson 4.14 teaches: key-free, and it aggregates
+the same upstream advisories (GitHub Security Advisories and CVE records).
+Dependency-Check's own report is uploaded as a build artifact each time the job runs.
 
 One methodology note, because it changed the numbers: an early pass reported a
 Netty finding. That was a **parsing bug in the scan script**, not a real issue —
@@ -192,6 +198,12 @@ moved, a checksum cannot. Findings are written to `trivy-report.txt`, uploaded a
 an artifact and summarised in the job output; the job does not block a release the
 dependency gate has already approved.
 
+**CircleCI — dependency scan.** `dependency-scan` runs OWASP Dependency-Check via
+`./mvnw verify -Psecurity`, caching both `~/.m2` and the NVD data directory. It
+halts with instructions when `NVD_API_KEY` is absent, for the same reason the Snyk
+jobs halt: an unconfigured credential should look unconfigured, not broken. The HTML
+and JSON reports are stored as artifacts.
+
 ## Reproducing a scan locally
 
 ```bash
@@ -201,6 +213,9 @@ snyk code test --severity-threshold=high
 
 # container scan of the image that ships (no Docker daemon needed)
 trivy image --severity HIGH,CRITICAL siewsphone/taskflow-api:1.1.0
+
+# the tool named in the brief (needs a free NVD API key)
+NVD_API_KEY=... ./mvnw verify -Psecurity -DskipTests
 
 # the dependency set behind the findings, straight from the build
 mvn dependency:list -DincludeScope=runtime -DoutputFile=deps.txt

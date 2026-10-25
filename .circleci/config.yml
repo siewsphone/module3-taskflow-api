@@ -330,6 +330,68 @@ jobs:
           path: trivy-report.json
           destination: trivy-report.json
 
+  # ==========================================
+  # DEPENDENCY-SCAN JOB - OWASP Dependency-Check (the tool named in the brief)
+  # ==========================================
+  # Snyk (4.13) and OSV-Scanner (4.14) are the taught tools; this adds the tool the
+  # assignment brief asks for by name, so the repository satisfies both.
+  #
+  # Two caches make it viable: ~/.m2 for the Maven dependencies and the NVD data
+  # directory, which holds the ~250 MB CVE feed. Without the feed cache the first
+  # sync alone outlasts the job.
+  #
+  # failBuildOnCVSS=7 means a HIGH or CRITICAL finding fails this job. It is wired
+  # as a watchdog rather than a gate: `publish` does not require it, so a new CVE
+  # against an unchanged dependency is visible without silently blocking a release
+  # that the Snyk gate already approved.
+  dependency-scan:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - maven-deps-{{ checksum "pom.xml" }}
+            - maven-deps-
+      - restore_cache:
+          keys:
+            - nvd-data-v1-{{ checksum "pom.xml" }}
+            - nvd-data-v1-
+      - run:
+          name: Check for an NVD API key
+          command: |
+            if [ -z "${NVD_API_KEY:-}" ]; then
+              echo "NVD_API_KEY is not configured for this project."
+              echo "Free key: https://nvd.nist.gov/developers/request-an-api-key"
+              echo "Then: Project Settings -> Environment Variables -> NVD_API_KEY"
+              echo "Without it the NVD feed is rate-limited to the point that the sync"
+              echo "outlasts this job, so the scan cannot run here."
+              circleci-agent step halt
+            fi
+      - run:
+          name: Run OWASP Dependency-Check
+          command: |
+            ./mvnw -B -Psecurity -DskipTests -DnvdApiDelay=2000 verify
+      - save_cache:
+          paths:
+            - ~/.m2
+            - ~/.m2/repository/org/owasp/dependency-check-data
+          key: nvd-data-v1-{{ checksum "pom.xml" }}
+      - store_artifacts:
+          path: target/dependency-check-report.html
+          destination: dependency-check-report.html
+      - store_artifacts:
+          path: target/dependency-check-report.json
+          destination: dependency-check-report.json
+      - run:
+          name: Summarise findings
+          when: always
+          command: |
+            REPORT=target/dependency-check-report.json
+            if [ ! -f "$REPORT" ]; then echo "No report produced."; exit 0; fi
+            echo "HIGH:     $(grep -o '"severity": *"HIGH"' "$REPORT" | wc -l)"
+            echo "CRITICAL: $(grep -o '"severity": *"CRITICAL"' "$REPORT" | wc -l)"
+
 workflows:
   build-test-publish:
     jobs:
@@ -342,6 +404,10 @@ workflows:
             - build
             - snyk_scan
             - snyk_code
+          filters:
+            branches:
+              only: main
+      - dependency-scan:
           filters:
             branches:
               only: main
