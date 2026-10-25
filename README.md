@@ -442,8 +442,21 @@ the live URL for a header that exists only in the current commit - so the job pr
 the container was replaced instead of trusting the redeploy command's exit code.
 Lesson: a failure that exits 0 is worse than a red build, because nobody looks at it.
 
-**4. A bodyless `PUT /api/tasks/{id}` returns 500, not 400.**
-The handler takes `@RequestBody`, so a request with no body is rejected before it
-reaches the service, and Module 3 specified no field validation that would turn
-that into a 400. It is a malformed request, not a server fault — send a JSON body
-with `Content-Type: application/json`.
+**4. A bodyless `PUT /api/tasks/{id}` returned 500 with a leaked method signature.**
+Found by the ZAP baseline scan, not by review. The catch-all handler returned
+`"Something went wrong: " + ex.getMessage()`, so a PUT with no body answered 500 with
+the controller's full signature on the wire:
+
+```
+"message":"Something went wrong: Required request body is missing: public
+org.springframework.http.ResponseEntity<sg.edu.ntu.taskflowapi.model.Task>
+sg.edu.ntu.taskflowapi.controller.TaskController.updateTask(java.lang.Long,
+sg.edu.ntu.taskflowapi.model.Task)"
+```
+
+Package names, class names, method and parameter types — a public response describing
+the server's internals, and the wrong status on top of it: a malformed request is a
+client error. Fixed in `GlobalExceptionHandler`: `HttpMessageNotReadableException` maps
+to **400** with fixed text, unknown routes to 404, and the catch-all logs the exception
+server-side and returns `"Internal server error"`. Nothing derived from an exception
+reaches a client any more.

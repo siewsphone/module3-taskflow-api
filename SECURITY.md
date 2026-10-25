@@ -303,9 +303,23 @@ issues, no version disclosure. The six warnings, and what was done about each:
 | 90022 | Application Error Disclosure (x4) | `server.error.*` set to `never` / `false` |
 | 10049 | Non-Storable Content (x5) | inherent to `no-store`; accepted, not a defect |
 
-The first five are fixed in `SecurityHeadersFilter` and `application.properties`; the
-sixth is a side effect of the fix and the scan will keep reporting it, which is honest
-rather than a problem to suppress. The job is `fail_action: false` by design (a
+The first five were fixed in `SecurityHeadersFilter` and `application.properties`, and
+the re-run confirmed three of them gone (6 → 3 warnings, PASS 62 → 65):
+
+```
+WARN-NEW: Re-examine Cache-control Directives [10015] x 1
+WARN-NEW: Non-Storable Content [10049] x 5
+WARN-NEW: Application Error Disclosure [90022] x 4
+FAIL-NEW: 0   WARN-NEW: 3   INFO: 0   IGNORE: 0   PASS: 65
+```
+
+90022 survived because the headers fix was not the cause: the application's own
+`GlobalExceptionHandler` was returning `"Something went wrong: " + ex.getMessage()`, and
+for a bodyless PUT that meant the controller's full Java signature in a public 500
+response — package names, method and parameter types. Fixed by returning fixed text and
+mapping `HttpMessageNotReadableException` to 400, which also corrects the status code.
+10015 and 10049 are both consequences of `Cache-Control: no-store` on live data; they
+are deliberate and documented rather than suppressed. The job is `fail_action: false` by design (a
 watchdog reports, a gate blocks — Snyk is the gate), so these never block a release.
 
 This is the value of DAST over the other four checks: Snyk, OSV, Dependency-Check and
