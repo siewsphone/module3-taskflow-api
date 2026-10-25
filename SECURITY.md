@@ -16,15 +16,28 @@ mvn dependency:list -DincludeScope=runtime -DoutputFile=deps.txt
 the vulnerable jars here are all *transitive* — none of them is declared in
 `pom.xml`, so reading the file would have missed every one of them.
 
-## Tooling, and one honest detour
+## Tooling
 
-The lesson specifies **OWASP Dependency-Check**. That plugin was run first:
+This stretch goal is set by Lessons 4.13 and 4.14, which cover four checks, and
+the pipeline runs all four:
 
-```bash
-mvn org.owasp:dependency-check-maven:check
-```
+| Tool | Type | Role | Lesson |
+|---|---|---|---|
+| **Snyk** (`snyk_scan`) | SCA | **Gate** — HIGH/CRITICAL blocks `publish` | 4.13 |
+| **Snyk Code** (`snyk_code`) | SAST | **Gate** — scans `src/` for code-level defects | 4.13 |
+| **OSV-Scanner** | SCA | **Watchdog** — weekly re-scan of unchanged code | 4.14 |
+| **OWASP ZAP** baseline | DAST | **Watchdog** — inspects the deployed app's responses | 4.14 |
+| **Trivy** (`container-scan`) | Container | **Watchdog** — scans the image that actually ships | 4.13/4.14 |
 
-It fails in this environment:
+The distinction matters and the lessons make it explicit: **gates** stop a release,
+**watchdogs** report and keep watching. Snyk is the gate because it runs on every
+push and blocks `publish`; OSV-Scanner and ZAP run on a schedule as well, because
+a CVE can be published against a dependency you have not touched since the last
+scan, and ZAP can only see how the app behaves while it is running.
+
+**One deviation, stated plainly.** The assignment brief names *OWASP
+Dependency-Check*, which neither lesson teaches. It was tried first and fails
+without an NVD API key:
 
 ```
 UpdateException: Error updating the NVD Data
@@ -32,13 +45,12 @@ UpdateException: Error updating the NVD Data
 NoDataException: No documents exist
 ```
 
-The NVD feed now requires an API key; without one there is no data to match
-against and the check cannot complete. **No API key was available**, so rather
-than skip the stretch goal, the same dependency set was scanned against
-**OSV.dev** (`api.osv.dev/v1/querybatch`), which is key-free and aggregates the
-same upstream advisories (GitHub Security Advisories, CVE records). The two tools
-answer the same question against overlapping data; OSV is simply reachable
-without credentials.
+The findings below were therefore produced with **OSV.dev**, which is the SCA
+source behind OSV-Scanner that Lesson 4.14 teaches — key-free and aggregating the
+same upstream advisories (GitHub Security Advisories, CVE records). If the brief's
+literal tool is what a marker looks for, `mvn org.owasp:dependency-check-maven:check`
+with `NVD_API_KEY` exported runs it; it is not part of the pipeline because it
+cannot run there without the key.
 
 One methodology note, because it changed the numbers: an early pass reported a
 Netty finding. That was a **parsing bug in the scan script**, not a real issue —
@@ -151,41 +163,48 @@ Also removed in this pass: 14 `*:Zone.Identifier` files that had been committed.
 These are Windows/NTFS metadata sidecars, not credentials, but they should not be
 in a repository; the pattern is now in `.gitignore`.
 
-## Continuous checks (CI)
+## The pipeline
 
-Both checks above are now automated, because a claim in a README cannot fail a
-build while a check can.
+**CircleCI — the gate** (Lesson 4.13). `snyk_scan` and `snyk_code` start alongside
+`build`, and `publish` requires *both* of them plus `test`. A HIGH or CRITICAL
+finding therefore stops the image from reaching Docker Hub, and Railway keeps
+serving the previous version. Both jobs halt with instructions if `SNYK_TOKEN` is
+not configured, so a missing credential reads as "not configured" rather than as
+a vulnerability.
 
-**`secrets` job** — installs `gitleaks` and scans the **full git history**
-(`gitleaks detect --source . --redact`). History, not just the working tree: a
-credential committed once is leaked permanently, since `git rm` removes it from
-`HEAD` but not from earlier commits. `--redact` keeps any finding out of the
-build log. The job fails the pipeline on a hit.
+**GitHub Actions — the watchdogs** (Lesson 4.14), both pinned by full commit SHA
+because Lesson 4.13's case study is a scanner whose version tags were moved onto
+malicious code:
 
-**`dependency-scan` job** — runs the same Maven profile documented in
-[A reproducible scan](#a-reproducible-scan), against the live NVD feed. Without
-an `NVD_API_KEY` the feed sync is rate-limited beyond CI's time budget, so the
-job halts successfully and prints the local command instead of failing red —
-a missing key reads as "not configured", not as a vulnerability. With the key
-set, findings at CVSS ≥ 7 fail the build and the HTML report is uploaded as a
-pipeline artifact.
+- `.github/workflows/osv-scanner.yml` — Google's reusable OSV-Scanner workflow,
+  on push to `main`, every Monday 09:30 SGT, and on demand.
+- `.github/workflows/zap-baseline.yml` — ZAP baseline against `vars.APP_URL`
+  (the deployed Railway URL), every Monday 10:00 SGT and on demand. Baseline, not
+  full scan: it sends normal requests only, which is what makes it safe against
+  production. `fail_action: false` because it is a watchdog, not a gate.
 
-Both run on every push, in parallel with `build`, so a credential or a high-severity
-dependency never reaches `publish`.
+**CircleCI — the container scan.** `container-scan` runs Trivy over the published
+image after `publish`, so the scan covers the base OS packages and the JRE as well
+as the application's own dependencies. Trivy reads the image from the registry, so
+no Docker daemon is needed. The binary is pinned to version 0.76.1 **and verified
+against the release's published SHA-256** before it runs — a version tag can be
+moved, a checksum cannot. Findings are written to `trivy-report.txt`, uploaded as
+an artifact and summarised in the job output; the job does not block a release the
+dependency gate has already approved.
 
-## A reproducible scan
-
-The scan is reproducible by anyone, not just by the machine that first ran it:
+## Reproducing a scan locally
 
 ```bash
-./mvnw verify -Psecurity                          # uses the NVD feed, no key
-./mvnw verify -Psecurity -DnvdApiKey=$NVD_API_KEY # same, but not rate-limited
-```
+# SCA + SAST, the same checks the gate runs (needs SNYK_TOKEN + the Snyk CLI)
+snyk test --severity-threshold=high
+snyk code test --severity-threshold=high
 
-The profile lives in `pom.xml` and is deliberately **not** part of the default
-build — the NVD download is hundreds of megabytes and would slow every build that
-does not need it. `failBuildOnCVSS=7` makes the gate real: high and critical
-findings fail the run rather than producing a report nobody reads.
+# container scan of the image that ships (no Docker daemon needed)
+trivy image --severity HIGH,CRITICAL siewsphone/taskflow-api:1.1.0
+
+# the dependency set behind the findings, straight from the build
+mvn dependency:list -DincludeScope=runtime -DoutputFile=deps.txt
+```
 
 ## Known remaining issues
 

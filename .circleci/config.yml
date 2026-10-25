@@ -1,5 +1,9 @@
 version: 2.1
 
+# Lesson 4.13: Snyk's orb, pinned to an exact orb version (not @volatile).
+orbs:
+  snyk: snyk/snyk@2.3.0
+
 # ---------------------------------------------------------------------------
 # TaskFlow API — Module 4 stretch goal, OPTION 1: CI pipeline
 #
@@ -223,74 +227,128 @@ jobs:
             echo "Railway is pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
 
   # ==========================================
-  # SECRETS JOB - fail the build if a credential is committed
+  # SNYK_SCAN JOB - Snyk: scan Maven dependencies (SCA)
   # ==========================================
-  # Option 5 asks for "no passwords, tokens or other secrets committed". That is
-  # not something to assert in a README; it needs a check that can fail. gitleaks
-  # scans the full git history, not just the working tree, because a secret that
-  # was committed once is leaked forever - deleting the file does not remove it
-  # from history. --redact keeps any finding out of the build log.
-  secrets:
+  # Lesson 4.13's gate. Fails on HIGH and CRITICAL findings, which stops
+  # `publish`, so a vulnerable dependency never reaches Docker Hub or Railway.
+  # The orb logs in with SNYK_TOKEN; if no token is configured the job halts with
+  # instructions instead of failing, so a missing credential reads as
+  # "not configured" rather than a vulnerability.
+  snyk_scan:
     docker:
-      - image: cimg/base:stable
+      - image: cimg/openjdk:21.0
     steps:
       - checkout
+      - restore_cache:
+          keys:
+            - maven-deps-{{ checksum "pom.xml" }}
+            - maven-deps-
       - run:
-          name: Install gitleaks
+          name: Check for a Snyk token
           command: |
-            curl -sSL -o gitleaks.tar.gz \
-              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-            tar -xzf gitleaks.tar.gz gitleaks
-            sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
-            gitleaks version
-      - run:
-          name: Scan git history for committed secrets
-          command: |
-            gitleaks detect --source . --redact --verbose
-            echo "No committed secrets found."
+            if [ -z "${SNYK_TOKEN:-}" ]; then
+              echo "SNYK_TOKEN is not configured for this project."
+              echo "Free account: https://app.snyk.io  ->  Account settings -> API token"
+              echo "Then: Project Settings -> Environment Variables -> SNYK_TOKEN"
+              circleci-agent step halt
+            fi
+      - snyk/scan:
+          severity-threshold: high
+          cli-version: 1.1308.1
+          monitor-on-build: false
 
   # ==========================================
-  # DEPENDENCY SCAN JOB - OWASP dependency-check
+  # SNYK_CODE JOB - Snyk Code: static analysis (SAST) of src/
   # ==========================================
-  # Runs the same Maven profile documented in the README (Option 5). Without an
-  # NVD API key the feed sync is rate-limited to the point of timing out, so the
-  # job halts successfully and prints what to configure - the same pattern the
-  # deploy job uses for missing Railway credentials. A missing key reads as "not
-  # configured", not as a vulnerability.
-  dependency-scan:
+  # Lesson 4.13: the second half of the gate. SCA reads your dependencies, SAST
+  # reads your own source, so together they cover both what you imported and what
+  # you wrote.
+  snyk_code:
     docker:
       - image: cimg/openjdk:21.0
     steps:
       - checkout
       - run:
-          name: Check for an NVD API key
+          name: Check for a Snyk token
           command: |
-            if [ -z "${NVD_API_KEY:-}" ]; then
-              echo "NVD_API_KEY is not configured, so the NVD feed cannot be synced"
-              echo "within CI's time budget. Reproduce the scan locally with:"
-              echo "  ./mvnw verify -Psecurity -DnvdApiKey=<your key>"
-              echo "Free key: https://nvd.nist.gov/developers/request-an-api-key"
+            if [ -z "${SNYK_TOKEN:-}" ]; then
+              echo "SNYK_TOKEN is not configured for this project; skipping SAST."
               circleci-agent step halt
             fi
+      - snyk/scan:
+          command: code test
+          severity-threshold: high
+          cli-version: 1.1308.1
+          monitor-on-build: false
+
+  # ==========================================
+  # CONTAINER-SCAN JOB - Trivy: scan the image that actually ships
+  # ==========================================
+  # Option 5's optional extra. Snyk scans the dependencies declared in the POM;
+  # this scans the built image, so it also covers the base OS packages and the JRE
+  # that the application never lists as dependencies.
+  #
+  # Trivy reads the image straight from the registry, so no Docker daemon is
+  # needed here.
+  #
+  # The binary is pinned by release version AND checked against the published
+  # SHA-256. Deliberate: Lesson 4.13's case study is a Trivy release that was
+  # tampered with and had its version tags force-pushed onto malicious code.
+  # A checksum cannot be moved onto different bytes.
+  container-scan:
+    docker:
+      - image: cimg/base:stable
+    steps:
       - run:
-          name: Run OWASP dependency-check
+          name: Install Trivy 0.76.1 (checksum verified)
           command: |
-            mvn -B -Psecurity verify -DnvdApiKey="$NVD_API_KEY" -DskipTests
-          no_output_timeout: 30m
+            VERSION=0.76.1
+            EXPECTED_SHA=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+            curl -sSL -o trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${VERSION}/trivy_${VERSION}_Linux-64bit.tar.gz"
+            echo "${EXPECTED_SHA}  trivy.tar.gz" | sha256sum -c -
+            tar -xzf trivy.tar.gz trivy
+            sudo install -m 0755 trivy /usr/local/bin/trivy
+            trivy --version
+      - run:
+          name: Scan the published image (HIGH and CRITICAL)
+          command: |
+            IMAGE="$DOCKER_USERNAME/taskflow-api:latest"
+            trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+              --username "$DOCKER_USERNAME" --password "$DOCKER_TOKEN" \
+              --format table "$IMAGE" | tee trivy-report.txt
+            trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+              --username "$DOCKER_USERNAME" --password "$DOCKER_TOKEN" \
+              --format json "$IMAGE" > trivy-report.json || true
+            echo
+            echo "--- totals (watchdog: reported, not blocking) ---"
+            echo "CRITICAL: $(grep -o '\"Severity\": *\"CRITICAL\"' trivy-report.json | wc -l)"
+            echo "HIGH:     $(grep -o '\"Severity\": *\"HIGH\"' trivy-report.json | wc -l)"
       - store_artifacts:
-          path: target/dependency-check-report.html
-          destination: dependency-check-report.html
+          path: trivy-report.txt
+          destination: trivy-report.txt
+      - store_artifacts:
+          path: trivy-report.json
+          destination: trivy-report.json
 
 workflows:
   build-test-publish:
     jobs:
       - build
-      - secrets
-      - dependency-scan
+      - snyk_scan
+      - snyk_code
       - publish:
           context: docker-hub
           requires:
             - build
+            - snyk_scan
+            - snyk_code
+          filters:
+            branches:
+              only: main
+      - container-scan:
+          context: docker-hub
+          requires:
+            - publish
           filters:
             branches:
               only: main

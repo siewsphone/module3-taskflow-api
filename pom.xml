@@ -114,44 +114,5 @@
         </plugins>
     </build>
 
-    <!--
-      Option 5 — reproduce the dependency scan on demand:
-
-          ./mvnw verify -Psecurity                        (local)
-          ./mvnw verify -Psecurity -DnvdApiKey=$NVD_API_KEY   (faster feed sync)
-
-      Deliberately NOT part of the default build: the NVD feed download is
-      hundreds of megabytes and adds minutes to builds that do not need it.
-      failBuildOnCVSS=7 fails the run on high/critical findings, which is what
-      makes the gate meaningful instead of a report nobody reads.
-    -->
-    <profiles>
-        <profile>
-            <id>security</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.owasp</groupId>
-                        <artifactId>dependency-check-maven</artifactId>
-                        <version>12.1.3</version>
-                        <configuration>
-                            <failBuildOnCVSS>7</failBuildOnCVSS>
-                            <formats>
-                                <format>HTML</format>
-                                <format>JSON</format>
-                            </formats>
-                        </configuration>
-                        <executions>
-                            <execution>
-                                <goals>
-                                    <goal>check</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 
 </project>
