@@ -172,16 +172,19 @@ can never reach the registry): builds from the repository's `Dockerfile` via
 service tracks), the SemVer version read from `pom.xml`, and `sha-<short SHA>`.
 See [Option 4](#option-4--published-versioned-images) for why all three exist.
 
-**`deploy`** (after `publish`): asks Railway to pull the new image via the
-Railway CLI, installed with Railway's own installer because the npm package's
-`postinstall` binary fetch is skipped by CI's script policy. Two variables —
-`RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID` — are needed for this job to do
-anything; while they are absent it prints what to do instead and halts
-**successfully** (`circleci-agent step halt`), so a missing credential reads as
-"not configured" rather than a red pipeline. Those two variables are the one
-remaining manual step; until they are set, shipping a new image is one click on
-**Railway → service → Deploys → Redeploy latest image**, because the Railway
-service does not re-pull `latest` on its own when CI pushes a new one.
+**`deploy`** (after `publish`): asks Railway to pull the new image via the Railway
+CLI, installed with Railway's own installer because the npm package's
+`postinstall` binary fetch is skipped by CI's script policy. It needs
+`RAILWAY_TOKEN` and `RAILWAY_SERVICE_ID`, and — after a false green — it **fails**
+rather than halts when either is missing: a deployment job that deploys nothing must
+not report success. It then **proves the rollout landed** by polling the live URL for
+a header that only exists in the current commit, so "deployed" is a measured fact and
+not the exit code of a redeploy command. See
+[Errors and failures](#errors-and-failures) item 3 for what that false green cost.
+
+**Two more jobs run alongside**, both described in
+[Option 5](#option-5--security-checks): `snyk_scan` + `snyk_code` gate `publish`, and
+`dependency-scan` + `container-scan` (Trivy) report without gating.
 
 **Credentials are not in the repository.** `DOCKER_USERNAME` and
 `DOCKER_TOKEN` are read from a CircleCI **context** (`docker-hub`); the job
@@ -190,7 +193,7 @@ Docker Hub access token with Read & Write scope, never the account password.
 
 | | |
 |---|---|
-| Pipeline runs (build → publish → deploy, newest first) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api> (run **#11** is the latest green one) |
+| Pipeline runs (newest first) | <https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api> |
 | Image on Docker Hub | <https://hub.docker.com/r/siewsphone/taskflow-api> |
 
 ### Option 2 — Frontend on Netlify
@@ -335,32 +338,102 @@ The bare-SHA tags further down the page (`40c3ccf`, `8bf0d75`) are from the
 earlier scheme, before the `sha-` prefix and the SemVer tags were added; they are
 left in place as history rather than deleted.
 
-### Option 5 — dependency security checks
+### Option 5 — security checks
 
-Scanning the 121 resolved runtime dependencies found **17 published advisories
-across 5 transitive packages**, including three authentication/authorisation
-defects in `tomcat-embed-core 11.0.24` reachable over HTTP. All five were
-remediated by overriding the Spring Boot BOM versions (`tomcat.version`,
-`jackson-bom.version`, plus an explicit pin for the legacy Jackson 2.x line). A
-re-scan reports **0 findings**, and the full 38-check endpoint sweep still passes
-on the rebuilt application.
+Six checks run against this repository, and each result below was read out of a CI run
+rather than inferred from a green badge:
 
-Full detail — method, before/after results, the tooling detour, and the
-container-scan gap — is in [`SECURITY.md`](SECURITY.md).
+| Tool | Type | Role | Result on this repository |
+|---|---|---|---|
+| **Snyk** (`snyk_scan`) | SCA | **Gate** — HIGH/CRITICAL blocks `publish` | **9** issues in 123 dependencies → **0** after remediation |
+| **Snyk Code** (`snyk_code`) | SAST | **Gate** | **0** issues |
+| **OWASP Dependency-Check** (`dependency-scan`) | SCA | Watchdog — the tool the brief names | failed the build at CVSS ≥ 7 on the same advisories |
+| **OSV-Scanner** (`osv-scanner.yml`) | SCA | Watchdog — weekly re-scan | 5 Maven + 115 npm packages → **no issues found** |
+| **OWASP ZAP** baseline (`zap-baseline.yml`) | DAST | Watchdog — weekly | **0 FAIL, 2 WARN, 66 PASS** |
+| **Trivy** (`container-scan`) | Container | Watchdog | **1 HIGH** in the base image → **0 HIGH / 0 CRITICAL** after the fix |
 
-The scan is reproducible rather than a one-off, and both checks now run on every
-push to `main`:
+**Gates stop a release; watchdogs report and keep watching.** Snyk is the gate because
+it runs on every push and `publish` requires it. OSV-Scanner and ZAP run on a schedule
+as well as on push, because a CVE can be published against a dependency you have not
+touched since the last scan, and ZAP can only see how the service behaves while it is
+running. Trivy runs after `publish`, on the image that actually ships.
 
-| What | How |
-|---|---|
-| Reproduce locally | `mvn verify -Psecurity` (add `-DnvdApiKey=$NVD_API_KEY` to skip the feed rate limit) |
-| `secrets` CI job | `gitleaks` over the **full git history**, `--redact` so a finding never lands in the build log; fails the pipeline on a hit |
-| `dependency-scan` CI job | the same Maven profile against the live NVD feed; fails at CVSS ≥ 7 and uploads the HTML report as an artifact |
+#### What the dependency gate caught
 
-The secrets job exists because of a specific trap: `.gitignore` does not untrack a
-file that is already in the index. A credential committed once keeps shipping to
-the remote even after the file is deleted and ignored — so the check has to read
-history, not the working tree.
+On its first run with a real token, `snyk_scan` scanned 123 dependencies and found
+**9 issues across 4 packages** — and blocked `publish`:
+
+| Package | Version found | Severity |
+|---|---|---|
+| `io.netty:netty-codec-http` | 4.2.17.Final | HIGH ×1 |
+| `io.netty:netty-codec-classes-quic` | 4.2.17.Final | HIGH ×1 |
+| `io.netty:netty-codec-http3` | 4.2.17.Final | HIGH ×5 |
+| `org.apache.tomcat.embed:tomcat-embed-websocket` | 11.0.25 | HIGH ×1, **CRITICAL** ×1 |
+
+Every one is **transitive** — none appears in `pom.xml`, so no diff review would have
+found them. That is the argument for a gate over a careful reading of the POM.
+
+Remediated through the property names Spring Boot's own `dependencyManagement` reads,
+so each line moves as a unit instead of one jar being pinned while its siblings stay
+behind: `spring-boot-starter-parent` 4.1.1 → **4.1.2**, `tomcat.version` 11.0.25 →
+**11.0.27**, `netty.version` → **4.2.19.Final**, `spring-ai.version` 2.0.0 → **2.0.2**.
+Re-scan: **124 dependencies, 0 issues, 0 vulnerable paths**. No severity threshold was
+raised and no finding was ignored to make it pass.
+
+**OWASP Dependency-Check is the tool the assignment names**, and it independently
+reached the same conclusion on the same POM: the build failed with
+`See the dependency-check report for more details` at `failBuildOnCVSS=7`. Two tools,
+two advisory feeds, same verdict. It runs behind the `security` Maven profile with an
+NVD cache, because a cold feed sync takes ~45 minutes.
+
+#### What DAST caught
+
+ZAP's baseline against the deployed app went **6 → 3 → 2 warnings** across three runs
+while PASS rose **62 → 66**, with 0 failures throughout:
+
+- **Fixed:** `X-Content-Type-Options`, `Strict-Transport-Security`,
+  `Cross-Origin-Resource-Policy` (as `cross-origin` — `same-origin` would break the
+  Netlify frontend), `X-Frame-Options`, CSP, `Cache-Control: no-store`
+  (`SecurityHeadersFilter`)
+- **Fixed, and this one mattered:** `Application Error Disclosure`. The catch-all
+  exception handler returned `"Something went wrong: " + ex.getMessage()`, so a
+  bodyless `PUT` answered **500** with the controller's full Java signature — package
+  names, class names, method and parameter types — in a public response. Now
+  `HttpMessageNotReadableException` maps to **400** with fixed text, unknown routes to
+  404, and the catch-all logs server-side and returns `"Internal server error"`
+- **Accepted:** `Re-examine Cache-control Directives` and `Non-Storable Content`, both
+  consequences of `no-store` on live in-memory data — correct here, and left visible
+  rather than suppressed with a ZAP rules override. A scanner taught to ignore things
+  stops being a scanner
+
+#### What the container scan caught
+
+Trivy found **one HIGH in the base image**, not in this application's code:
+
+```
+taskflow-api:latest (alpine 3.24.3)  alpine  1 vulnerability
+app/app.jar                          jar     0
+brotli-libs  CVE-2026-111497  HIGH  fixed  1.2.0-r1 -> 1.2.1-r0
+```
+
+`app/app.jar` reading **0** is the point: everything the POM declares is clean, and the
+finding lives in the alpine layer the JRE sits on — invisible to Snyk, OSV and
+Dependency-Check, all of which read `pom.xml`. Fixed with `RUN apk upgrade --no-cache`
+in the runtime stage; the rebuilt image scans **0 HIGH / 0 CRITICAL**. The Trivy binary
+is pinned to 0.76.1 **and verified against the release SHA-256**, because Lesson 4.13's
+case study is a scanner whose version tags were moved onto malicious code.
+
+#### Reproducing the checks locally
+
+```bash
+snyk test --severity-threshold=high          # SCA, the same gate
+snyk code test --severity-threshold=high     # SAST
+NVD_API_KEY=... mvn verify -Psecurity        # OWASP Dependency-Check
+trivy image --severity HIGH,CRITICAL siewsphone/taskflow-api:1.1.0
+```
+
+Method, before/after results and the accepted warnings in full:
+[`SECURITY.md`](SECURITY.md).
 
 ---
 
