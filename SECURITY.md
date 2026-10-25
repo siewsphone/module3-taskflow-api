@@ -250,29 +250,39 @@ its siblings stay behind:
 No `--severity-threshold` was raised and no finding was ignored to make the gate
 pass. The override moves the versions; the next pipeline run re-scans and decides.
 
-## Container scan result
+## Container scan: detection, then fix
 
-The `container-scan` job runs Trivy over the published image after every publish.
-First run, on `1.1.0`:
+The container scan is only worth having if it can be shown to catch things, so it
+was made to catch this one twice — once on a deliberately unfixed image, once on the
+fixed one. Two adjacent pipeline runs, same image tag, one line of difference.
+
+**Run 1 — capture.** With the `apk upgrade` line removed, `container-scan` (#81,
+commit `bfc2936`) reported:
 
 ```
+target: taskflow-api:latest (alpine 3.24.3)  alpine  1 vulnerability
+        app/app.jar                          jar     0
 Total: 1 (HIGH: 1, CRITICAL: 0)
 brotli-libs  CVE-2026-111497  HIGH  fixed  1.2.0-r1 -> 1.2.1-r0
-             "brotli: Out-of-Bounds Write in Google Brotli Decoder"
+             brotli: Out-of-Bounds Write in Google Brotli Decoder
 ```
 
-One HIGH, and it is in the **base image**, not in this application's code: a
-compression library pulled in by the alpine JRE, which the POM-level scanners
-cannot see. The fix is an `apk upgrade` in the runtime stage of the Dockerfile.
-The next run confirmed it — the rebuilt image scans clean:
+Read that split carefully, because it is the whole argument for scanning the image:
+**`app/app.jar` is 0.** Everything this application declares is clean. The finding
+lives in the alpine base layer that the JRE sits on — invisible to Snyk, to
+OSV-Scanner and to Dependency-Check, all of which read `pom.xml`.
+
+**Run 2 — fix.** With `RUN apk upgrade --no-cache` restored (`beff5d1`),
+`container-scan` (#90) reported:
 
 ```
+target: taskflow-api:latest (alpine 3.24.3)  alpine  0
+        app/app.jar                          jar     0
 CRITICAL: 0
 HIGH:     0
 ```
 
-That is the argument for scanning the image and not just the dependency tree: a
-clean `pom.xml` scan says nothing about what the container actually carries.
+Detection and remediation, both evidenced by a run rather than asserted in prose.
 
 ## Known remaining issues
 
