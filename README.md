@@ -135,6 +135,11 @@ not a failure. Both screenshots are the Railway URL, unmodified.
 
 ## Stretch goals
 
+Five stretch goals were completed. Each section below states what was built and links
+to the evidence: **Option 1** CI pipeline, **Option 2** frontend on Netlify,
+**Option 3** the Simple CRM route, **Option 4** versioned images, **Option 5** security
+checks.
+
 ### Option 1 — CI pipeline (CircleCI): build → test → publish to Docker Hub → redeploy
 
 `.circleci/config.yml` runs a single `build-test-publish` workflow on every push.
@@ -243,6 +248,37 @@ then deleted through the UI (`DELETE /api/tasks/{id} → 200`). No CORS error, n
 console message, and the counters returned to their original state afterwards.
 That is the end-to-end proof that the preflight response above is what the
 deployed image really answers, not just what the local JAR answered.
+
+### Option 3 — the Simple CRM projects
+
+Option 3 is the alternative route: containerize and deploy the **Simple CRM** API and
+its React frontend *instead of* TaskFlow. Both halves are live, and their full write-up
+lives in the API repository, because that is where the Dockerfile, the database wiring
+and the CORS configuration actually are:
+
+| | |
+|---|---|
+| Live API (Railway) | <https://simple-crm-lite-production-4fe9.up.railway.app/customers> |
+| Live frontend (Netlify) | <https://simple-crm-lite.netlify.app> |
+| Full write-up | <https://github.com/siewsphone/simple-crm-lite#module-4--stretch-goal-option-3-simple-crm-deployed> |
+| Image on Docker Hub | <https://hub.docker.com/r/siewsphone/simple-crm-lite> |
+
+Short version of what that route involved, since the details are one click away:
+
+- **Same multi-stage Dockerfile pattern**, but this API cannot run standalone —
+  `application.properties` has no default datasource, so the container needs
+  `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` *and* a reachable Postgres before it
+  will start. `docker-compose.yml` supplies both locally, gated on a database healthcheck.
+- **Railway service variables** carry those three values; the service could not be
+  serving requests otherwise, because there are no fallback defaults in code.
+- **CORS** had to be added server-side: the Netlify origin calls the Railway origin
+  directly, so the API answers the preflight with `Access-Control-Allow-Origin` and
+  `expose-headers: Location`.
+- **CI** runs `build → test → publish`, and the `test` job starts a real
+  `cimg/postgres:16.0` service container — which is what makes it a genuine datasource
+  test rather than a mocking exercise.
+- Endpoints verified against the deployed URL: `GET /customers` 200, `POST` 201,
+  `GET /customers/{id}` 200, `PUT` 200, `DELETE` 204, re-`GET` after delete 404.
 
 ### Option 4 — Published, versioned images
 
