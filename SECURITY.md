@@ -234,19 +234,24 @@ brotli-libs  CVE-2026-111497  HIGH  fixed  1.2.0-r1 -> 1.2.1-r0
 
 One HIGH, and it is in the **base image**, not in this application's code: a
 compression library pulled in by the alpine JRE, which the POM-level scanners
-cannot see. The fix is an `apk upgrade` in the runtime stage of the Dockerfile,
-committed with this note, and the next `container-scan` run is what confirms it.
+cannot see. The fix is an `apk upgrade` in the runtime stage of the Dockerfile.
+The next run confirmed it — the rebuilt image scans clean:
+
+```
+CRITICAL: 0
+HIGH:     0
+```
 
 That is the argument for scanning the image and not just the dependency tree: a
 clean `pom.xml` scan says nothing about what the container actually carries.
 
 ## Known remaining issues
 
-**1. The Snyk gate is wired but not yet enforcing.** `snyk_scan` and `snyk_code`
-require a `SNYK_TOKEN` project environment variable. Until one is added they halt
-with instructions instead of scanning, so the pipeline is green without an actual
-SCA/SAST pass. Everything else in this document was produced by a check that really
-ran — this is the one piece waiting on a credential.
+**1. The Snyk gate reports what Snyk reports.** `SNYK_TOKEN` is configured as a
+project environment variable, so `snyk_scan` and `snyk_code` run the real CLI rather
+than halting. Note what that means in practice: the gate can only block findings
+the Snyk rule set knows about, with `severity-threshold: high`. A MEDIUM finding
+passes. That is the lesson's configuration, kept deliberately.
 
 **2. These are patch-level upgrades, not a full audit.** OSV and Dependency-Check
 report *known* advisories. A clean result means nothing matching a published
