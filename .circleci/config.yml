@@ -240,6 +240,26 @@ jobs:
   # The orb logs in with SNYK_TOKEN; if no token is configured the job halts with
   # instructions instead of failing, so a missing credential reads as
   # "not configured" rather than a vulnerability.
+
+      - run:
+          name: Verify the deployment landed
+          command: |
+            # A redeploy request returning 0 only means Railway accepted it. This
+            # asserts the new image is actually serving: the security headers come from
+            # SecurityHeadersFilter, which exists in this commit and in no earlier one,
+            # so their presence proves the running container was replaced.
+            URL="https://module3-taskflow-api-production.up.railway.app/api/tasks"
+            for i in $(seq 1 30); do
+              if curl -sSI -m 10 "$URL" | tr -d '\r' | grep -qi '^x-content-type-options: nosniff'; then
+                echo "Deployment verified after $((i*10))s: new image is serving."
+                exit 0
+              fi
+              echo "attempt $i: still serving the previous image, waiting 10s"
+              sleep 10
+            done
+            echo "Deployment did NOT land - the live app still has no security headers."
+            exit 1
+
   snyk_scan:
     docker:
       - image: cimg/openjdk:21.0
