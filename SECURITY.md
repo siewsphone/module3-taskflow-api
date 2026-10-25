@@ -198,7 +198,23 @@ moved, a checksum cannot. Findings are written to `trivy-report.txt`, uploaded a
 an artifact and summarised in the job output; the job does not block a release the
 dependency gate has already approved.
 
-**CircleCI — dependency scan.** `dependency-scan` runs OWASP Dependency-Check via
+**CircleCI — dependency scan.** It ran and it did its job: the first completed run
+(job #58, commit `c13e469`) **failed the build** with
+
+```
+[ERROR] See the dependency-check report for more details.
+[ERROR] Failed to execute goal org.owasp:dependency-check-maven:12.1.3:check
+```
+
+That is `failBuildOnCVSS=7` doing what it is configured to do — Dependency-Check
+independently found the same Netty and Tomcat advisories Snyk had, on the POM as it
+stood before the upgrade. Two tools, two advisory feeds, same conclusion. The job
+takes ~45 minutes on a cold NVD cache (the feed is ~250 MB, synced into one step, so
+it needs `no_output_timeout: 45m`); the cache makes subsequent runs short. The
+report is uploaded as `dependency-check-report.html` / `.json` either way, because
+`store_artifacts` runs even when the scan fails.
+
+**CircleCI — dependency scan (configuration).** `dependency-scan` runs OWASP Dependency-Check via
 `mvn verify -Psecurity`, caching both `~/.m2` and the NVD data directory. It
 halts with instructions when `NVD_API_KEY` is absent, for the same reason the Snyk
 jobs halt: an unconfigured credential should look unconfigured, not broken. The HTML

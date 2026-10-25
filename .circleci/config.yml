@@ -370,6 +370,9 @@ jobs:
             fi
       - run:
           name: Run OWASP Dependency-Check
+          # The first run syncs the whole NVD feed and takes ~45 minutes inside this
+          # single step; CircleCI's default no-output timeout is far shorter.
+          no_output_timeout: 45m
           command: |
             mvn -B -Psecurity -DskipTests -DnvdApiDelay=2000 verify
       - save_cache:
