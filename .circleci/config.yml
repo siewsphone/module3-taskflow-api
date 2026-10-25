@@ -422,7 +422,7 @@ jobs:
             echo "CRITICAL: $(grep -o '"severity": *"CRITICAL"' "$REPORT" | wc -l)"
 
 workflows:
-  build-test-publish:
+  build-publish:
     jobs:
       - build
       - snyk_scan
