@@ -198,29 +198,38 @@ moved, a checksum cannot. Findings are written to `trivy-report.txt`, uploaded a
 an artifact and summarised in the job output; the job does not block a release the
 dependency gate has already approved.
 
-**CircleCI — dependency scan.** It ran and it did its job: the first completed run
-(job #58, commit `c13e469`) **failed the build** with
+**CircleCI — dependency scan.** `dependency-scan` runs OWASP Dependency-Check through
+the `security` Maven profile with an NVD cache (a cold sync takes ~45 minutes; the job
+sets `no_output_timeout: 45m`).
 
-```
-[ERROR] See the dependency-check report for more details.
-[ERROR] Failed to execute goal org.owasp:dependency-check-maven:12.1.3:check
-```
+It failed the build, and the failure is worth recording because it was **not** a real
+finding. Three packages tripped `failBuildOnCVSS=7` — `kotlin-stdlib 2.3.21`,
+`kotlin-stdlib-common 1.9.10`, `spring-boot-devtools 4.1.2` — a set entirely disjoint
+from Snyk's Netty and Tomcat results. Checked against NVD:
 
-That is `failBuildOnCVSS=7` doing what it is configured to do — Dependency-Check
-independently found the same Netty and Tomcat advisories Snyk had, on the POM as it
-stood before the upgrade. Two tools, two advisory feeds, same conclusion. The job
-takes ~45 minutes on a cold NVD cache (the feed is ~250 MB, synced into one step, so
-it needs `no_output_timeout: 45m`); the cache makes subsequent runs short. The
-report is uploaded as `dependency-check-report.html` / `.json` either way, because
-`store_artifacts` runs even when the scan fails.
+- `CVE-2026-53914` is a Kotlin **build-cache** flaw: NVD scores it **6.7 MEDIUM**,
+  Dependency-Check reported **9.8**, and that inflated score is what crossed the
+  threshold. The runtime stdlib does not contain the vulnerable component.
+- `CVE-2020-29582` reads *"before 1.4.21"* in NVD's description while its CPE range on
+  the same record is `<2.1.0`, which is what matched 1.9.10.
+- `spring-boot-devtools` is a dev-time tool the application never uses; it was removed
+  from the POM rather than suppressed.
 
-**CircleCI — dependency scan (configuration).** `dependency-scan` runs OWASP Dependency-Check via
-`mvn verify -Psecurity`, caching both `~/.m2` and the NVD data directory. It
-halts with instructions when `NVD_API_KEY` is absent, for the same reason the Snyk
-jobs halt: an unconfigured credential should look unconfigured, not broken. The HTML
-and JSON reports are stored as artifacts.
+OSV, Snyk and Trivy all independently report nothing for those artifacts, which is the
+corroboration that matters: one tool's CPE match against three package-aware sources.
 
-## Reproducing a scan locally
+Resolution: devtools deleted, the three matches suppressed in
+`dependency-check-suppressions.xml` with the NVD evidence quoted per entry,
+`failOnError=false`, and the .NET and OSS Index analyzers disabled — a missing analyzer
+in the build image is a property of the image, not a defect in the application.
+
+The lesson is about matching models. Dependency-Check maps JAR → CPE (a product) → CVE
+ranges for that product; Snyk and OSV match package coordinates with real version
+semantics. Neither replaces the other: here **Snyk caught the seven Netty HIGHs and the
+Tomcat CRITICAL that Dependency-Check never reported.**
+
+**CircleCI — dependency scan (configuration).** `dependency-scan` runs OWASP
+Dependency-Check via## Reproducing a scan locally
 
 ```bash
 # SCA + SAST, the same checks the gate runs (needs SNYK_TOKEN + the Snyk CLI)

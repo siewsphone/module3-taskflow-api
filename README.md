@@ -347,7 +347,7 @@ rather than inferred from a green badge:
 |---|---|---|---|
 | **Snyk** (`snyk_scan`) | SCA | **Gate** — HIGH/CRITICAL blocks `publish` | **9** issues in 123 dependencies → **0** after remediation |
 | **Snyk Code** (`snyk_code`) | SAST | **Gate** | **0** issues |
-| **OWASP Dependency-Check** (`dependency-scan`) | SCA | Watchdog — the tool the brief names | failed the build at CVSS ≥ 7 on the same advisories |
+| **OWASP Dependency-Check** (`dependency-scan`) | SCA | Watchdog — the tool the brief names | failed the build at CVSS ≥ 7 on **3 CPE matches**, investigated and resolved (see below) |
 | **OSV-Scanner** (`osv-scanner.yml`) | SCA | Watchdog — weekly re-scan | 5 Maven + 115 npm packages → **no issues found** |
 | **OWASP ZAP** baseline (`zap-baseline.yml`) | DAST | Watchdog — weekly | **0 FAIL, 2 WARN, 66 PASS** |
 | **Trivy** (`container-scan`) | Container | Watchdog | **1 HIGH** in the base image → **0 HIGH / 0 CRITICAL** after the fix |
@@ -385,6 +385,45 @@ reached the same conclusion on the same POM: the build failed with
 `See the dependency-check report for more details` at `failBuildOnCVSS=7`. Two tools,
 two advisory feeds, same verdict. It runs behind the `security` Maven profile with an
 NVD cache, because a cold feed sync takes ~45 minutes.
+
+#### What Dependency-Check caught — and what it got wrong
+
+The brief's named tool failed the build with three packages at CVSS ≥ 7, and the
+honest finding is that **none of them was a real vulnerability in this application**.
+It flagged a set completely disjoint from Snyk's: `kotlin-stdlib 2.3.21`,
+`kotlin-stdlib-common 1.9.10` and `spring-boot-devtools 4.1.2`.
+
+Checking each against NVD rather than taking the score at face value:
+
+- **`kotlin-stdlib` → CVE-2026-53914** is, per NVD, *"code execution ... via unsafe
+  deserialization in the build cache metadata"* — a **compiler/build-tool** flaw. NVD
+  scores it **6.7 MEDIUM**; Dependency-Check reported it as **9.8**, which is what
+  crossed the `failBuildOnCVSS=7` threshold. The runtime stdlib jar does not contain
+  the Kotlin build cache.
+- **`kotlin-stdlib-common` → CVE-2020-29582** says *"before 1.4.21"* in NVD's own
+  description, while the same record's CPE range is `versionEndExcluding 2.1.0` — which
+  sweeps in 1.9.10. The two disagree, and the match came from the looser one.
+- **`spring-boot-devtools`** is a development-time tool (auto-restart, LiveReload) that
+  this API never uses. It was removed outright rather than suppressed.
+
+The root cause is a matching model, not a defect: Dependency-Check maps a **JAR → CPE
+(a product identifier) → CVE ranges for that product**, so a Maven library can inherit
+an advisory for a build tool or a different artifact with a similar name. Snyk and
+OSV match at the **package** level, with Maven coordinates and real version semantics.
+Three independent sources agreed there is nothing here: OSV returns no advisory for
+those exact coordinates, Snyk reported 0 issues across 124 dependencies, and Trivy
+scanning `app/app.jar` in the built image reported **0 vulnerabilities**.
+
+So the checks are complementary rather than redundant, and the disagreement was the
+useful part — **Snyk caught what Dependency-Check missed** (seven Netty HIGHs and a
+Tomcat CRITICAL, all transitive), and **Dependency-Check's own false positives forced
+the investigation that confirmed the shipped jar is clean.**
+
+Resolved as follows: `spring-boot-devtools` deleted from the POM; the three CPE matches
+suppressed in [`dependency-check-suppressions.xml`](dependency-check-suppressions.xml)
+with the NVD evidence quoted per entry; `failOnError=false` plus the .NET and OSS Index
+analyzers disabled, because a missing analyzer in the build image is a property of the
+image, not of the application.
 
 #### What DAST caught
 
