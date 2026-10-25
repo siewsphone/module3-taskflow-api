@@ -353,7 +353,7 @@ push to `main`:
 
 | What | How |
 |---|---|
-| Reproduce locally | `./mvnw verify -Psecurity` (add `-DnvdApiKey=$NVD_API_KEY` to skip the feed rate limit) |
+| Reproduce locally | `mvn verify -Psecurity` (add `-DnvdApiKey=$NVD_API_KEY` to skip the feed rate limit) |
 | `secrets` CI job | `gitleaks` over the **full git history**, `--redact` so a finding never lands in the build log; fails the pipeline on a hit |
 | `dependency-scan` CI job | the same Maven profile against the live NVD feed; fails at CVSS ≥ 7 and uploads the HTML report as an artifact |
 
@@ -388,7 +388,7 @@ survives only as long as the container does.
 ## Running without Docker
 
 ```bash
-./mvnw spring-boot:run
+mvn spring-boot:run
 # or
 mvn clean package -DskipTests && java -jar target/*.jar
 ```

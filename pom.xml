@@ -122,7 +122,7 @@
       (~250 MB); it belongs in its own CI job with a cache, not in every
       `mvn verify`. Run it by hand with:
 
-        ./mvnw verify -Psecurity -DnvdApiKey=$NVD_API_KEY
+        mvn verify -Psecurity -DnvdApiKey=$NVD_API_KEY
     -->
     <profile>
       <id>security</id>

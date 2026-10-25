@@ -371,7 +371,7 @@ jobs:
       - run:
           name: Run OWASP Dependency-Check
           command: |
-            ./mvnw -B -Psecurity -DskipTests -DnvdApiDelay=2000 verify
+            mvn -B -Psecurity -DskipTests -DnvdApiDelay=2000 verify
       - save_cache:
           paths:
             - ~/.m2

@@ -199,7 +199,7 @@ an artifact and summarised in the job output; the job does not block a release t
 dependency gate has already approved.
 
 **CircleCI — dependency scan.** `dependency-scan` runs OWASP Dependency-Check via
-`./mvnw verify -Psecurity`, caching both `~/.m2` and the NVD data directory. It
+`mvn verify -Psecurity`, caching both `~/.m2` and the NVD data directory. It
 halts with instructions when `NVD_API_KEY` is absent, for the same reason the Snyk
 jobs halt: an unconfigured credential should look unconfigured, not broken. The HTML
 and JSON reports are stored as artifacts.
@@ -215,29 +215,50 @@ snyk code test --severity-threshold=high
 trivy image --severity HIGH,CRITICAL siewsphone/taskflow-api:1.1.0
 
 # the tool named in the brief (needs a free NVD API key)
-NVD_API_KEY=... ./mvnw verify -Psecurity -DskipTests
+NVD_API_KEY=... mvn verify -Psecurity -DskipTests
 
 # the dependency set behind the findings, straight from the build
 mvn dependency:list -DincludeScope=runtime -DoutputFile=deps.txt
 ```
 
+## Container scan result
+
+The `container-scan` job runs Trivy over the published image after every publish.
+First run, on `1.1.0`:
+
+```
+Total: 1 (HIGH: 1, CRITICAL: 0)
+brotli-libs  CVE-2026-111497  HIGH  fixed  1.2.0-r1 -> 1.2.1-r0
+             "brotli: Out-of-Bounds Write in Google Brotli Decoder"
+```
+
+One HIGH, and it is in the **base image**, not in this application's code: a
+compression library pulled in by the alpine JRE, which the POM-level scanners
+cannot see. The fix is an `apk upgrade` in the runtime stage of the Dockerfile,
+committed with this note, and the next `container-scan` run is what confirms it.
+
+That is the argument for scanning the image and not just the dependency tree: a
+clean `pom.xml` scan says nothing about what the container actually carries.
+
 ## Known remaining issues
 
-**1. The image itself has not been scanned with a container scanner.**
-The lesson offers this as optional. It cannot be done in the environment used
-here — there is no Docker daemon — and an image scan needs the built image. Scan
-`taskflow:latest` with Trivy or Docker Scout once the image builds locally:
-`docker scout cves taskflow:latest`. Base-image findings would be expected on
-`eclipse-temurin:21-jre-alpine` regardless of the application's own dependencies.
+**1. The Snyk gate is wired but not yet enforcing.** `snyk_scan` and `snyk_code`
+require a `SNYK_TOKEN` project environment variable. Until one is added they halt
+with instructions instead of scanning, so the pipeline is green without an actual
+SCA/SAST pass. Everything else in this document was produced by a check that really
+ran — this is the one piece waiting on a credential.
 
-**2. OWASP Dependency-Check has not produced a report.**
-Only because it requires an NVD API key (free, from
-<https://nvd.nist.gov/developers/request-an-api-key>). With a key exported as
-`NVD_API_KEY` the original lesson command works unchanged, and it is worth running
-so the submission uses the tool the module names.
+**2. These are patch-level upgrades, not a full audit.** OSV and Dependency-Check
+report *known* advisories. A clean result means nothing matching a published
+advisory was found in the resolved jars — it is not proof the code is
+vulnerability-free.
 
-**3. These are patch-level upgrades, not a full audit.**
-OSV reports *known* advisories. A clean result means nothing matching a published
-advisory was found in the 121 resolved jars — it is not proof the code is
-vulnerability-free, and the application deliberately has no authentication or
-database in its Module 3 scope.
+**3. The application has no authentication and no database** in its Module 3 scope,
+so every endpoint is public by design. That is out of scope for this module but it
+is the largest single risk in the running service, and ZAP's baseline scan has
+nothing to test in that direction because there is no login surface to probe.
+
+**4. Base-image findings will recur.** The `container-scan` job found one HIGH in
+`brotli-libs` inside the JRE image. `apk upgrade` handles it today, but a
+digest-pinned base image will keep surfacing new CVEs as they are published — which
+is exactly why that job runs on every publish rather than once.
