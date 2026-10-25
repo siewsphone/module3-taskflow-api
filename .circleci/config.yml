@@ -200,11 +200,17 @@ jobs:
       - run:
           name: Check for Railway credentials
           command: |
+            # This fails instead of halting on purpose. It used to halt, which exits 0
+            # and shows the job green - and the variable in this project is spelled
+            # RAILWAY_SERVIEC_ID, so every deploy reported success while deploying
+            # nothing at all. A deployment job that never deploys must not look healthy.
             if [ -z "${RAILWAY_TOKEN:-}" ] || [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
               echo "RAILWAY_TOKEN / RAILWAY_SERVICE_ID are not configured for this project."
-              echo "The image above is published to Docker Hub; ship it with one click:"
-              echo "  Railway dashboard -> service -> Deploys -> Redeploy latest image"
-              circleci-agent step halt
+              echo "Both are required to trigger a redeploy of the new image."
+              echo "Check the spelling: the variable is RAILWAY_SERVICE_ID, and a common"
+              echo "typo is RAILWAY_SERVIEC_ID - which is present in this project."
+              echo "Railway dashboard -> service -> Deploys -> Redeploy latest image"
+              exit 1
             fi
       - run:
           name: Install the Railway CLI
