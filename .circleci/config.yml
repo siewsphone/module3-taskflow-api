@@ -133,9 +133,15 @@ jobs:
   # ==========================================
   # PUBLISH JOB - Build and push Docker image
   # ==========================================
-  # Two tags per build: `latest` (what the Railway service tracks) and the
-  # short commit SHA, so a published image stays traceable to its commit after
-  # `latest` has moved on.
+  # Three tags per build:
+  #
+  #   latest      what the Railway service tracks
+  #   <semver>    MAJOR.MINOR.PATCH, read from pom.xml (SemVer, Lesson 4.5)
+  #   sha-<7>     short commit SHA, so every image is traceable to its commit
+  #
+  # Bump the version in pom.xml to publish a new numbered release; the tag is
+  # derived from the POM, never typed by hand, so an image can't claim a version
+  # the code does not declare.
   publish:
     docker:
       - image: cimg/base:stable
@@ -146,19 +152,26 @@ jobs:
           name: Build Docker image
           command: |
             IMAGE="$DOCKER_USERNAME/taskflow-api"
-            SHA_TAG="${CIRCLE_SHA1:0:7}"
-            echo "Building $IMAGE:latest and $IMAGE:$SHA_TAG"
-            docker build -t "$IMAGE:latest" -t "$IMAGE:$SHA_TAG" .
+            # first <version> after </parent> is the project version, not the parent's
+            VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            VERSION="${VERSION%-SNAPSHOT}"
+            SHA_TAG="sha-${CIRCLE_SHA1:0:7}"
+            if [ -z "$VERSION" ]; then echo "Could not read the version from pom.xml"; exit 1; fi
+            echo "Publishing $IMAGE:latest, $IMAGE:$VERSION, $IMAGE:$SHA_TAG"
+            docker build -t "$IMAGE:latest" -t "$IMAGE:$VERSION" -t "$IMAGE:$SHA_TAG" .
       - run:
           name: Push to Docker Hub
           command: |
             IMAGE="$DOCKER_USERNAME/taskflow-api"
-            SHA_TAG="${CIRCLE_SHA1:0:7}"
+            VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            VERSION="${VERSION%-SNAPSHOT}"
+            SHA_TAG="sha-${CIRCLE_SHA1:0:7}"
             echo "Logging in to Docker Hub..."
             echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
-            echo "Pushing $IMAGE:latest and $IMAGE:$SHA_TAG"
-            docker push "$IMAGE:latest"
+            docker push "$IMAGE:$VERSION"
             docker push "$IMAGE:$SHA_TAG"
+            docker push "$IMAGE:latest"
+            echo "Pushed $IMAGE:$VERSION, $IMAGE:$SHA_TAG and $IMAGE:latest"
 
 
   # ==========================================

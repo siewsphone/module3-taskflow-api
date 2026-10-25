@@ -13,7 +13,7 @@
 
     <groupId>sg.edu.ntu</groupId>
     <artifactId>taskflow-api</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>taskflow-api</name>
     <description>TaskFlow - Task Management API (Module 3 assignment)</description>
     <packaging>jar</packaging>
