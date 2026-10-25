@@ -1,6 +1,7 @@
 package sg.edu.ntu.taskflowapi.controller;
 
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -89,6 +90,20 @@ public class TaskController {
         List<Task> tasks = taskService.findAllTasks();
         String summary = taskSummaryService.summarise(tasks);
         return new ResponseEntity<>(summary, HttpStatus.OK);
+    }
+
+    /**
+     * GET /api/tasks/version -> 200 with the build version baked into the JAR.
+     *
+     * The Maven project version is copied into the manifest by the Spring Boot
+     * plugin, so a running container can report which image tag it came from.
+     * That is what makes versioned images (Option 4) verifiable at runtime
+     * instead of only readable in the Docker Hub UI.
+     */
+    @GetMapping("/version")
+    public ResponseEntity<Map<String, String>> getVersion() {
+        String version = getClass().getPackage().getImplementationVersion();
+        return ResponseEntity.ok(Map.of("version", version == null ? "dev" : version));
     }
 
 }

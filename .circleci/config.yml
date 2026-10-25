@@ -110,6 +110,18 @@ jobs:
             # Nothing is left in the store here, so /summary short-circuits
             # before it reaches the model and needs no API key.
             check 200 "$(code "$BASE/api/tasks/summary")"          "GET /tasks/summary"
+            # Option 4: the JAR must report the version the POM declares, so a
+            # running container can prove which image tag it came from.
+            EXPECTED_VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            EXPECTED_VERSION="${EXPECTED_VERSION%-SNAPSHOT}"
+            check 200 "$(code "$BASE/api/tasks/version")"          "GET /tasks/version"
+            ACTUAL_VERSION=$(curl -s "$BASE/api/tasks/version" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+            if [ "$ACTUAL_VERSION" = "$EXPECTED_VERSION" ]; then
+              echo "PASS  /tasks/version reports $ACTUAL_VERSION"
+            else
+              echo "FAIL  /tasks/version reports '${ACTUAL_VERSION:-<none>}', pom says '$EXPECTED_VERSION'"
+              fail=1
+            fi
 
             echo "---"
             if [ "$fail" -ne 0 ]; then
