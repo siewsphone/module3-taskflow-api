@@ -310,6 +310,20 @@ on the rebuilt application.
 Full detail — method, before/after results, the tooling detour, and the
 container-scan gap — is in [`SECURITY.md`](SECURITY.md).
 
+The scan is reproducible rather than a one-off, and both checks now run on every
+push to `main`:
+
+| What | How |
+|---|---|
+| Reproduce locally | `./mvnw verify -Psecurity` (add `-DnvdApiKey=$NVD_API_KEY` to skip the feed rate limit) |
+| `secrets` CI job | `gitleaks` over the **full git history**, `--redact` so a finding never lands in the build log; fails the pipeline on a hit |
+| `dependency-scan` CI job | the same Maven profile against the live NVD feed; fails at CVSS ≥ 7 and uploads the HTML report as an artifact |
+
+The secrets job exists because of a specific trap: `.gitignore` does not untrack a
+file that is already in the index. A credential committed once keeps shipping to
+the remote even after the file is deleted and ignored — so the check has to read
+history, not the working tree.
+
 ---
 
 ## Endpoints

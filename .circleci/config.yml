@@ -222,11 +222,71 @@ jobs:
             railway redeploy --service "$RAILWAY_SERVICE_ID" --yes
             echo "Railway is pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
 
+  # ==========================================
+  # SECRETS JOB - fail the build if a credential is committed
+  # ==========================================
+  # Option 5 asks for "no passwords, tokens or other secrets committed". That is
+  # not something to assert in a README; it needs a check that can fail. gitleaks
+  # scans the full git history, not just the working tree, because a secret that
+  # was committed once is leaked forever - deleting the file does not remove it
+  # from history. --redact keeps any finding out of the build log.
+  secrets:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Install gitleaks
+          command: |
+            curl -sSL -o gitleaks.tar.gz \
+              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+            tar -xzf gitleaks.tar.gz gitleaks
+            sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+            gitleaks version
+      - run:
+          name: Scan git history for committed secrets
+          command: |
+            gitleaks detect --source . --redact --verbose
+            echo "No committed secrets found."
+
+  # ==========================================
+  # DEPENDENCY SCAN JOB - OWASP dependency-check
+  # ==========================================
+  # Runs the same Maven profile documented in the README (Option 5). Without an
+  # NVD API key the feed sync is rate-limited to the point of timing out, so the
+  # job halts successfully and prints what to configure - the same pattern the
+  # deploy job uses for missing Railway credentials. A missing key reads as "not
+  # configured", not as a vulnerability.
+  dependency-scan:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+      - run:
+          name: Check for an NVD API key
+          command: |
+            if [ -z "${NVD_API_KEY:-}" ]; then
+              echo "NVD_API_KEY is not configured, so the NVD feed cannot be synced"
+              echo "within CI's time budget. Reproduce the scan locally with:"
+              echo "  ./mvnw verify -Psecurity -DnvdApiKey=<your key>"
+              echo "Free key: https://nvd.nist.gov/developers/request-an-api-key"
+              circleci-agent step halt
+            fi
+      - run:
+          name: Run OWASP dependency-check
+          command: |
+            mvn -B -Psecurity verify -DnvdApiKey="$NVD_API_KEY" -DskipTests
+          no_output_timeout: 30m
+      - store_artifacts:
+          path: target/dependency-check-report.html
+          destination: dependency-check-report.html
 
 workflows:
   build-test-publish:
     jobs:
       - build
+      - secrets
+      - dependency-scan
       - publish:
           context: docker-hub
           requires:

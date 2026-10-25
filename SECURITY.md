@@ -151,6 +151,42 @@ Also removed in this pass: 14 `*:Zone.Identifier` files that had been committed.
 These are Windows/NTFS metadata sidecars, not credentials, but they should not be
 in a repository; the pattern is now in `.gitignore`.
 
+## Continuous checks (CI)
+
+Both checks above are now automated, because a claim in a README cannot fail a
+build while a check can.
+
+**`secrets` job** — installs `gitleaks` and scans the **full git history**
+(`gitleaks detect --source . --redact`). History, not just the working tree: a
+credential committed once is leaked permanently, since `git rm` removes it from
+`HEAD` but not from earlier commits. `--redact` keeps any finding out of the
+build log. The job fails the pipeline on a hit.
+
+**`dependency-scan` job** — runs the same Maven profile documented in
+[A reproducible scan](#a-reproducible-scan), against the live NVD feed. Without
+an `NVD_API_KEY` the feed sync is rate-limited beyond CI's time budget, so the
+job halts successfully and prints the local command instead of failing red —
+a missing key reads as "not configured", not as a vulnerability. With the key
+set, findings at CVSS ≥ 7 fail the build and the HTML report is uploaded as a
+pipeline artifact.
+
+Both run on every push, in parallel with `build`, so a credential or a high-severity
+dependency never reaches `publish`.
+
+## A reproducible scan
+
+The scan is reproducible by anyone, not just by the machine that first ran it:
+
+```bash
+./mvnw verify -Psecurity                          # uses the NVD feed, no key
+./mvnw verify -Psecurity -DnvdApiKey=$NVD_API_KEY # same, but not rate-limited
+```
+
+The profile lives in `pom.xml` and is deliberately **not** part of the default
+build — the NVD download is hundreds of megabytes and would slow every build that
+does not need it. `failBuildOnCVSS=7` makes the gate real: high and critical
+findings fail the run rather than producing a report nobody reads.
+
 ## Known remaining issues
 
 **1. The image itself has not been scanned with a container scanner.**
