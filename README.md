@@ -143,7 +143,7 @@ reaches `main`):
    PASS  GET /999999 -> 404   PASS  GET /1 -> 200
    PASS  POST -> created id 1 PASS  DELETE /1 -> 200
    PASS  PUT /1 -> 200        PASS  GET /1 -> 404
-   PASS  GET /summary -> 200
+   PASS  GET /summary -> 200  PASS  GET /version -> 200 (reports 1.1.0)
    ```
 
    The project has no JUnit classes, so `mvn test` passes vacuously — this step is
@@ -152,9 +152,9 @@ reaches `main`):
 
 **`publish`** (only on `main`, only after `build` passes, so a failing change
 can never reach the registry): builds from the repository's `Dockerfile` via
-`setup_remote_docker` and pushes two tags: `latest` (the tag the Railway service
-tracks) and the short commit SHA, so a published image stays traceable to its
-commit after `latest` has moved on.
+`setup_remote_docker` and pushes **three tags** — `latest` (the tag the Railway
+service tracks), the SemVer version read from `pom.xml`, and `sha-<short SHA>`.
+See [Option 4](#option-4--published-versioned-images) for why all three exist.
 
 **`deploy`** (after `publish`): asks Railway to pull the new image via the
 Railway CLI, installed with Railway's own installer because the npm package's
@@ -177,14 +177,14 @@ Docker Hub access token with Read & Write scope, never the account password.
 
 ### Option 2 — Frontend on Netlify
 
-**Live frontend: <https://capable-licorice-a9c632.netlify.app>**
+**Live frontend: <https://ntu-taskflow.netlify.app>**
 
 A small React single-page app that consumes the deployed TaskFlow API — no
 local backend, every call goes to the live Railway URL.
 
 | | |
 |---|---|
-| **Frontend URL** | <https://capable-licorice-a9c632.netlify.app> |
+| **Frontend URL** | <https://ntu-taskflow.netlify.app> |
 | **Hosted on** | Netlify (static build of `frontend/`, folder `frontend/` in this repo) |
 | **Stack** | Vite + React 19, state via Context + `useReducer` |
 | **API calls** | `GET /api/tasks`, `POST /api/tasks`, `PUT /api/tasks/{id}/complete`, `PUT /api/tasks/{id}`, `DELETE /api/tasks/{id}` |
@@ -216,8 +216,8 @@ the Vite dev origin. Verified by booting the packaged JAR locally and checking
 the preflight response:
 
 ```
-OPTIONS /api/tasks  (Origin: https://capable-licorice-a9c632.netlify.app)
-  -> Access-Control-Allow-Origin: https://capable-licorice-a9c632.netlify.app
+OPTIONS /api/tasks  (Origin: https://ntu-taskflow.netlify.app)
+  -> Access-Control-Allow-Origin: https://ntu-taskflow.netlify.app
      Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS
 ```
 
@@ -230,6 +230,53 @@ then deleted through the UI (`DELETE /api/tasks/{id} → 200`). No CORS error, n
 console message, and the counters returned to their original state afterwards.
 That is the end-to-end proof that the preflight response above is what the
 deployed image really answers, not just what the local JAR answered.
+
+### Option 4 — Published, versioned images
+
+Every build publishes **three tags**, not just `latest`:
+
+| Tag | Kind | Meaning |
+|---|---|---|
+| `latest` | moving | what the Railway service tracks; always the newest build |
+| `1.1.0` | SemVer | `MAJOR.MINOR.PATCH` (Lesson 4.5), read from `pom.xml` |
+| `sha-21f4efe` | immutable | short commit SHA of the build |
+
+**The version is derived, never typed.** The publish job parses the project
+version out of `pom.xml` — the first `<version>` *after* `</parent>`, so it
+cannot pick up the Spring Boot parent's version instead — strips a `-SNAPSHOT`
+suffix if present, and tags the image with it. Bumping `pom.xml` is therefore
+the only way to publish a new number, and an image cannot claim a version the
+code does not declare.
+
+The SHA tag covers the opposite need: `latest` and `1.1.0` both move as new
+builds land, but `sha-<commit>` always resolves to the build of that exact
+commit. When something is broken in production, `sha-<commit>` is the tag that
+identifies the binary you are actually looking at.
+
+SemVer as practised here: MAJOR for breaking API changes, MINOR for new
+endpoints, PATCH for fixes. `1.0.0` was the first release; `1.1.0` added
+`GET /api/tasks/version`.
+
+**Verifiable at runtime.** That new endpoint reads the version from the JAR
+manifest (the Spring Boot plugin copies the Maven version into it), so a
+running container can say which tag it came from — no dashboard required:
+
+```console
+$ curl https://module3-taskflow-api-production.up.railway.app/api/tasks/version
+{"version":"1.1.0"}
+```
+
+The CI smoke test asserts this and fails when the runtime version and the POM
+version disagree. A versioned image that lies about its version is worse than an
+unversioned one.
+
+Two released versions in Docker Hub, with `latest` pointing at the newer:
+
+![Docker Hub tags: latest, sha-21f4efe, 1.1.0, sha-3113023, 1.0.0](screenshots/dockerhub-tags.png)
+
+The bare-SHA tags further down the page (`40c3ccf`, `8bf0d75`) are from the
+earlier scheme, before the `sha-` prefix and the SemVer tags were added; they are
+left in place as history rather than deleted.
 
 ### Option 5 — dependency security checks
 
@@ -257,6 +304,7 @@ container-scan gap — is in [`SECURITY.md`](SECURITY.md).
 | PUT | `/api/tasks/{id}/complete` | mark a task complete |
 | DELETE | `/api/tasks/{id}` | delete a task |
 | GET | `/api/tasks/summary` | AI-generated plain-English summary |
+| GET | `/api/tasks/version` | deployed build version from the JAR manifest |
 
 ---
 
@@ -372,7 +420,7 @@ The CORS build is nevertheless **live**. The image published by pipeline run
 [#6](https://app.circleci.com/pipelines/gh/siewsphone/module3-taskflow-api/6)
 (`sha256:d76b8646…`, pushed 21 Oct) was pulled by Railway on 24 Oct 02:02 UTC,
 and the deployed instance now answers the preflight with
-`Access-Control-Allow-Origin: https://capable-licorice-a9c632.netlify.app`,
+`Access-Control-Allow-Origin: https://ntu-taskflow.netlify.app`,
 `Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS` and
 `Access-Control-Max-Age: 1800`. The end-to-end check was run from a headless
 browser sitting on the Netlify origin: `GET /api/tasks → 200`,
