@@ -120,6 +120,17 @@ The 404 path is the one worth highlighting: an absent id is an invalid request,
 so it is a 404 — and it is produced by a single `@RestControllerAdvice` handler,
 so no controller contains a `try/catch` and no stack trace ever reaches the client.
 
+**Screenshots of the live application URL:**
+
+![Live API URL in a browser returning JSON](screenshots/url.png)
+
+![The same live URL returning two tasks](screenshots/url-with-data.png)
+
+The first was taken when the in-memory store was empty, which is why the body is
+`[]`; the second is the same live URL with tasks present. The store lives in
+memory, so it resets on every redeploy — an empty array is a healthy response,
+not a failure. Both screenshots are the Railway URL, unmodified.
+
 ---
 
 ## Stretch goals
