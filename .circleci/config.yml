@@ -92,7 +92,7 @@ jobs:
 
 
 workflows:
-  build-test-publish:
+  build-publish:
     jobs:
       - build
       - publish:
