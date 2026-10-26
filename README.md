@@ -349,15 +349,23 @@ rather than inferred from a green badge:
 | **Snyk** (`snyk_scan`) | SCA | **Gate** — HIGH/CRITICAL blocks `publish` | **9** issues in 123 dependencies → **0** after remediation |
 | **Snyk Code** (`snyk_code`) | SAST | **Gate** | **0** issues |
 | **OWASP Dependency-Check** (`dependency-scan`) | SCA | Watchdog — the tool the brief names | failed the build at CVSS ≥ 7 on **3 CPE matches**, investigated and resolved (see below) |
-| **OSV-Scanner** (`osv-scanner.yml`) | SCA | Watchdog — weekly re-scan | 5 Maven + 115 npm packages → **no issues found** |
-| **OWASP ZAP** baseline (`zap-baseline.yml`) | DAST | Watchdog — weekly | **0 FAIL, 2 WARN, 66 PASS** |
+| **OSV-Scanner** (`osv-scanner.yml`) | SCA | Watchdog — scheduled scan (workflow since removed, see note) | 5 Maven + 115 npm packages → **no issues found** |
+| **OWASP ZAP** baseline (`zap-baseline.yml`) | DAST | Watchdog — scheduled scan (workflow since removed) | **0 FAIL, 2 WARN, 66 PASS** |
 | **Trivy** (`container-scan`) | Container | Watchdog | **1 HIGH** in the base image → **0 HIGH / 0 CRITICAL** after the fix |
 
 **Gates stop a release; watchdogs report and keep watching.** Snyk is the gate because
-it runs on every push and `publish` requires it. OSV-Scanner and ZAP run on a schedule
-as well as on push, because a CVE can be published against a dependency you have not
-touched since the last scan, and ZAP can only see how the service behaves while it is
-running. Trivy runs after `publish`, on the image that actually ships.
+it runs on every push and `publish` requires it. OSV-Scanner and ZAP were scheduled as
+well as running on push, because a CVE can be published against a dependency you have
+not touched since the last scan, and ZAP can only see how the service behaves while it
+is running. Trivy runs after `publish`, on the image that actually ships.
+
+> **Note (26 Oct 2026):** the two scheduled GitHub Actions workflows
+> (`.github/workflows/osv-scanner.yml` and `zap-baseline.yml`) were later removed from
+> the repository at the owner's request, so nothing scans on a calendar any more. The
+> results quoted for them below are from the runs those workflows actually executed —
+> the run IDs are recorded in `SECURITY.md` — and the same scans can be re-run on
+> demand with `osv-scanner` and the ZAP Docker image. The push-triggered gates
+> (Snyk, Dependency-Check, Trivy) are unaffected and still run in CircleCI.
 
 #### What the dependency gate caught
 

@@ -25,16 +25,18 @@ the pipeline runs all four:
 |---|---|---|---|
 | **Snyk** (`snyk_scan`) | SCA | **Gate** — HIGH/CRITICAL blocks `publish` | 4.13 |
 | **Snyk Code** (`snyk_code`) | SAST | **Gate** — scans `src/` for code-level defects | 4.13 |
-| **OSV-Scanner** | SCA | **Watchdog** — weekly re-scan of unchanged code | 4.14 |
-| **OWASP ZAP** baseline | DAST | **Watchdog** — inspects the deployed app's responses | 4.14 |
+| **OSV-Scanner** | SCA | **Watchdog** — scheduled re-scan of unchanged code (workflow removed 26 Oct 2026, see below) | 4.14 |
+| **OWASP ZAP** baseline | DAST | **Watchdog** — inspects the deployed app's responses (workflow removed 26 Oct 2026) | 4.14 |
 | **Trivy** (`container-scan`) | Container | **Watchdog** — scans the image that actually ships | 4.13/4.14 |
 | **OWASP Dependency-Check** (`dependency-scan`) | SCA | **Watchdog** — the tool named in the brief | brief |
 
 The distinction matters and the lessons make it explicit: **gates** stop a release,
 **watchdogs** report and keep watching. Snyk is the gate because it runs on every
-push and blocks `publish`; OSV-Scanner and ZAP run on a schedule as well, because
+push and blocks `publish`; OSV-Scanner and ZAP also ran on a schedule, because
 a CVE can be published against a dependency you have not touched since the last
-scan, and ZAP can only see how the app behaves while it is running.
+scan, and ZAP can only see how the app behaves while it is running. Those two
+schedules were removed on 26 Oct 2026, so the checks that fire on a calendar are
+gone; the push- and publish-triggered checks in the table above all still run.
 
 **On OWASP Dependency-Check specifically.** The brief names it; Lessons 4.13 and
 4.14 do not teach it. Rather than choose, both are wired up: the taught stack runs
@@ -180,7 +182,9 @@ a vulnerability.
 
 **GitHub Actions — the watchdogs** (Lesson 4.14), both pinned by full commit SHA
 because Lesson 4.13's case study is a scanner whose version tags were moved onto
-malicious code:
+malicious code. *Both workflow files were removed from the repository on 26 Oct 2026
+at the owner's request, so the schedule no longer fires; the configuration and the
+recorded runs below are kept as the evidence of what was scanned and how.*
 
 - `.github/workflows/osv-scanner.yml` — Google's reusable OSV-Scanner workflow,
   on push to `main`, every Monday 09:30 SGT, and on demand.
