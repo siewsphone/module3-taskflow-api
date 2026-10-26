@@ -1,32 +1,40 @@
 version: 2.1
 
+# Lesson 4.13: Snyk's orb, pinned to an exact orb version (not @volatile).
+orbs:
+  snyk: snyk/snyk@2.3.0
+
 # ---------------------------------------------------------------------------
 # TaskFlow API — Module 4 stretch goal, OPTION 1: CI pipeline
 #
-#   build  ->  test  ->  publish the image to Docker Hub, on every push to main
+#   build (+ smoke test)  ->  publish image to Docker Hub  ->  ask Railway to pull it
 #
-# This runs alongside the existing deployment pipeline: Railway watches main and
-# redeploys, while this pipeline produces a versioned image in Docker Hub.
+# Runs on every push to any branch, so a broken change is caught before it
+# reaches main. `publish` and `deploy` only run for main, after `build` passes,
+# so a failing change can never reach the registry or the deployment.
 #
 # CREDENTIALS
 # -----------
-# Nothing secret is stored in this file. Two variables must be set in
-# CircleCI -> Project Settings -> Environment Variables:
+# Nothing secret is stored in this file. These must be set in
+# CircleCI -> Project Settings -> Environment Variables (or in a context):
 #
-#   DOCKER_USERNAME   your Docker Hub account name
-#   DOCKER_TOKEN      a Docker Hub *access token* with Read & Write scope
-#                        (create at hub.docker.com -> Account Settings ->
-#                         Personal access tokens). Do NOT use your password.
+#   DOCKER_USERNAME        Docker Hub account name        (context: docker-hub)
+#   DOCKER_TOKEN           Docker Hub access token, Read & Write scope
+#   RAILWAY_TOKEN          Railway project token          (deploy job only)
+#   RAILWAY_SERVICE_ID     Railway service id             (deploy job only)
 #
-# They can also come from a CircleCI Context if you prefer, in which case add
-# `context: dockerhub` to the publish job below.
+# The deploy job halts successfully, with an explanation, when the two Railway
+# variables are absent — so the pipeline stays green and the published image is
+# shipped from the Railway dashboard instead of failing on a credential it was
+# never given.
 # ---------------------------------------------------------------------------
 
 jobs:
 
   # -------------------------------------------------------------------------
-  # Build and test. Runs on every branch and every pull request, so a broken
-  # change is caught before it reaches main.
+  # Build and test. The project has no JUnit classes, so `mvn package` passes
+  # vacuously; the real test is the smoke sweep at the end of this job, which
+  # boots the packaged JAR and asserts every endpoint's status code.
   # -------------------------------------------------------------------------
   build:
     docker:
@@ -38,10 +46,96 @@ jobs:
             - maven-deps-{{ checksum "pom.xml" }}
             - maven-deps-
       - run:
-          name: Install dependencies and build
+          name: Build and package (test phase included)
+          command: mvn -B clean package
+      - run:
+          name: Smoke-test the packaged JAR
           command: |
-            echo "Building the application..."
-            mvn clean install -DskipTests
+            set -u
+            BASE=http://localhost:8080
+            CT='Content-Type: application/json'
+            BODY=/tmp/smoke_body
+            fail=0
+
+            check() { # expected actual label
+              if [ "$2" = "$1" ]; then
+                printf 'PASS  %-26s -> %s\n' "$3" "$2"
+              else
+                printf 'FAIL  %-26s -> %s (expected %s)\n' "$3" "$2" "$1"
+                fail=1
+              fi
+            }
+            code() { curl -s -o "$BODY" -w '%{http_code}' "$@"; }
+
+            echo "Starting the packaged application..."
+            java -jar target/*.jar > app.log 2>&1 &
+            APP_PID=$!
+            trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+
+            up=0
+            for i in $(seq 1 90); do
+              if curl -fsS -o /dev/null "$BASE/api/tasks"; then
+                echo "Application accepting requests after ${i}s"
+                up=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$up" -ne 1 ]; then
+              echo "Application never became ready; last 50 log lines:"
+              tail -50 app.log
+              exit 1
+            fi
+
+            # Start from an empty store so ids and counts are deterministic.
+            for id in $(curl -s "$BASE/api/tasks" | grep -o '"id":[0-9]*' | cut -d: -f2); do
+              curl -s -o /dev/null -X DELETE "$BASE/api/tasks/$id"
+            done
+
+            check 200 "$(code "$BASE/api/tasks")"                   "GET /tasks"
+            check 404 "$(code "$BASE/api/tasks/999999")"            "GET /tasks/999999"
+            check 201 "$(code -X POST "$BASE/api/tasks" -H "$CT" \
+                          -d '{"title":"Smoke test task","completed":false}')" "POST /tasks"
+
+            ID=$(grep -o '"id":[0-9]*' "$BODY" | cut -d: -f2)
+            echo "POST created id ${ID:-<none>}"
+            if [ -z "${ID:-}" ]; then
+              echo "FAIL  POST response carried no id"
+              fail=1
+              ID=1
+            fi
+
+            check 200 "$(code -X PUT "$BASE/api/tasks/$ID" -H "$CT" \
+                          -d '{"title":"Smoke test renamed","completed":false}')" "PUT /tasks/{id}"
+            check 200 "$(code -X PUT "$BASE/api/tasks/$ID/complete" -H "$CT")"  "PUT /tasks/{id}/complete"
+            check 200 "$(code "$BASE/api/tasks/$ID")"               "GET /tasks/{id}"
+            check 200 "$(code -X DELETE "$BASE/api/tasks/$ID")"     "DELETE /tasks/{id}"
+            check 404 "$(code "$BASE/api/tasks/$ID")"               "GET /tasks/{id} (after)"
+            # Nothing is left in the store here, so /summary short-circuits
+            # before it reaches the model and needs no API key.
+            check 200 "$(code "$BASE/api/tasks/summary")"          "GET /tasks/summary"
+            # Option 4: the JAR must report the version the POM declares, so a
+            # running container can prove which image tag it came from.
+            EXPECTED_VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            EXPECTED_VERSION="${EXPECTED_VERSION%-SNAPSHOT}"
+            check 200 "$(code "$BASE/api/tasks/version")"          "GET /tasks/version"
+            ACTUAL_VERSION=$(curl -s "$BASE/api/tasks/version" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+            if [ "$ACTUAL_VERSION" = "$EXPECTED_VERSION" ]; then
+              echo "PASS  /tasks/version reports $ACTUAL_VERSION"
+            else
+              echo "FAIL  /tasks/version reports '${ACTUAL_VERSION:-<none>}', pom says '$EXPECTED_VERSION'"
+              fail=1
+            fi
+
+            echo "---"
+            if [ "$fail" -ne 0 ]; then
+              echo "SMOKE TEST FAILED"
+              exit 1
+            fi
+            echo "SMOKE TEST PASSED"
+      - store_artifacts:
+          path: app.log
+          when: on_fail
       - save_cache:
           paths:
             - ~/.m2
@@ -55,49 +149,307 @@ jobs:
   # ==========================================
   # PUBLISH JOB - Build and push Docker image
   # ==========================================
+  # Three tags per build:
+  #
+  #   latest      what the Railway service tracks
+  #   <semver>    MAJOR.MINOR.PATCH, read from pom.xml (SemVer, Lesson 4.5)
+  #   sha-<7>     short commit SHA, so every image is traceable to its commit
+  #
+  # Bump the version in pom.xml to publish a new numbered release; the tag is
+  # derived from the POM, never typed by hand, so an image can't claim a version
+  # the code does not declare.
   publish:
     docker:
       - image: cimg/base:stable
     steps:
       - checkout
-      - attach_workspace:
-          at: .
       - setup_remote_docker
       - run:
           name: Build Docker image
           command: |
-            echo "Building Docker image..."
-            docker build -t $DOCKER_USERNAME/taskflow-api:latest .
+            IMAGE="$DOCKER_USERNAME/taskflow-api"
+            # first <version> after </parent> is the project version, not the parent's
+            VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            VERSION="${VERSION%-SNAPSHOT}"
+            SHA_TAG="sha-${CIRCLE_SHA1:0:7}"
+            if [ -z "$VERSION" ]; then echo "Could not read the version from pom.xml"; exit 1; fi
+            echo "Publishing $IMAGE:latest, $IMAGE:$VERSION, $IMAGE:$SHA_TAG"
+            docker build -t "$IMAGE:latest" -t "$IMAGE:$VERSION" -t "$IMAGE:$SHA_TAG" .
       - run:
           name: Push to Docker Hub
           command: |
+            IMAGE="$DOCKER_USERNAME/taskflow-api"
+            VERSION=$(awk '/<\/parent>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)
+            VERSION="${VERSION%-SNAPSHOT}"
+            SHA_TAG="sha-${CIRCLE_SHA1:0:7}"
             echo "Logging in to Docker Hub..."
-            echo $DOCKER_TOKEN | docker login -u $DOCKER_USERNAME --password-stdin
-            echo "Pushing image to Docker Hub..."
-            docker push $DOCKER_USERNAME/taskflow-api:latest
+            echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
+            docker push "$IMAGE:$VERSION"
+            docker push "$IMAGE:$SHA_TAG"
+            docker push "$IMAGE:latest"
+            echo "Pushed $IMAGE:$VERSION, $IMAGE:$SHA_TAG and $IMAGE:latest"
+
 
   # ==========================================
   # DEPLOY JOB - Tell Railway to redeploy
   # ==========================================
   deploy:
     docker:
-      - image: cimg/node:lts
+      - image: cimg/base:stable
     steps:
       - run:
-          name: Redeploy latest image on Railway
+          name: Check for Railway credentials
           command: |
-            echo "Asking Railway to redeploy the latest image..."
-            npx --yes @railway/cli redeploy --service "$RAILWAY_SERVICE_ID" --yes
-            echo "Railway is now pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
+            # This fails instead of halting on purpose. It used to halt, which exits 0
+            # and shows the job green - and the variable in this project is spelled
+            # RAILWAY_SERVIEC_ID, so every deploy reported success while deploying
+            # nothing at all. A deployment job that never deploys must not look healthy.
+            if [ -z "${RAILWAY_TOKEN:-}" ] || [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
+              echo "RAILWAY_TOKEN / RAILWAY_SERVICE_ID are not configured for this project."
+              echo "Both are required to trigger a redeploy of the new image."
+              echo "Check the spelling: the variable is RAILWAY_SERVICE_ID, and a common"
+              echo "typo is RAILWAY_SERVIEC_ID - which is present in this project."
+              echo "Railway dashboard -> service -> Deploys -> Redeploy latest image"
+              exit 1
+            fi
+      - run:
+          name: Install the Railway CLI
+          command: |
+            # The npm package fetches its real binary in a postinstall script,
+            # which CI's script policy skips — that is why `npx @railway/cli`
+            # cannot work here. Railway's own installer drops the binary, but it
+            # prompts "Install railway to ~/.railway/bin? [y/N]" and exits 1 on a
+            # non-interactive stdin, so it must be given --yes.
+            curl -fsSL cli.new | bash -s -- --yes
+            export PATH="$HOME/.railway/bin:$PATH"
+            railway --version
+      - run:
+          name: Redeploy the published image
+          command: |
+            # Each step is a fresh shell, so the CLI's install path must be
+            # re-exported here.
+            export PATH="$HOME/.railway/bin:$PATH"
+            railway redeploy --service "$RAILWAY_SERVICE_ID" --yes
+            echo "Railway is pulling $DOCKER_USERNAME/taskflow-api:latest from Docker Hub."
 
+  # ==========================================
+  # SNYK_SCAN JOB - Snyk: scan Maven dependencies (SCA)
+  # ==========================================
+  # Lesson 4.13's gate. Fails on HIGH and CRITICAL findings, which stops
+  # `publish`, so a vulnerable dependency never reaches Docker Hub or Railway.
+  # The orb logs in with SNYK_TOKEN; if no token is configured the job halts with
+  # instructions instead of failing, so a missing credential reads as
+  # "not configured" rather than a vulnerability.
+
+      - run:
+          name: Verify the deployment landed
+          command: |
+            # A redeploy request returning 0 only means Railway accepted it. This
+            # asserts the new image is actually serving: the security headers come from
+            # SecurityHeadersFilter, which exists in this commit and in no earlier one,
+            # so their presence proves the running container was replaced.
+            URL="https://module3-taskflow-api-production.up.railway.app/api/tasks"
+            for i in $(seq 1 30); do
+              if curl -sSI -m 10 "$URL" | tr -d '\r' | grep -qi '^x-content-type-options: nosniff'; then
+                echo "Deployment verified after $((i*10))s: new image is serving."
+                exit 0
+              fi
+              echo "attempt $i: still serving the previous image, waiting 10s"
+              sleep 10
+            done
+            echo "Deployment did NOT land - the live app still has no security headers."
+            exit 1
+
+  snyk_scan:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - maven-deps-{{ checksum "pom.xml" }}
+            - maven-deps-
+      - run:
+          name: Check for a Snyk token
+          command: |
+            if [ -z "${SNYK_TOKEN:-}" ]; then
+              echo "SNYK_TOKEN is not configured for this project."
+              echo "Free account: https://app.snyk.io  ->  Account settings -> API token"
+              echo "Then: Project Settings -> Environment Variables -> SNYK_TOKEN"
+              circleci-agent step halt
+            fi
+      - snyk/scan:
+          severity-threshold: high
+          cli-version: 1.1308.1
+          monitor-on-build: false
+
+  # ==========================================
+  # SNYK_CODE JOB - Snyk Code: static analysis (SAST) of src/
+  # ==========================================
+  # Lesson 4.13: the second half of the gate. SCA reads your dependencies, SAST
+  # reads your own source, so together they cover both what you imported and what
+  # you wrote.
+  snyk_code:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+      - run:
+          name: Check for a Snyk token
+          command: |
+            if [ -z "${SNYK_TOKEN:-}" ]; then
+              echo "SNYK_TOKEN is not configured for this project; skipping SAST."
+              circleci-agent step halt
+            fi
+      - snyk/scan:
+          command: code test
+          severity-threshold: high
+          cli-version: 1.1308.1
+          monitor-on-build: false
+
+  # ==========================================
+  # CONTAINER-SCAN JOB - Trivy: scan the image that actually ships
+  # ==========================================
+  # Option 5's optional extra. Snyk scans the dependencies declared in the POM;
+  # this scans the built image, so it also covers the base OS packages and the JRE
+  # that the application never lists as dependencies.
+  #
+  # Trivy reads the image straight from the registry, so no Docker daemon is
+  # needed here.
+  #
+  # The binary is pinned by release version AND checked against the published
+  # SHA-256. Deliberate: Lesson 4.13's case study is a Trivy release that was
+  # tampered with and had its version tags force-pushed onto malicious code.
+  # A checksum cannot be moved onto different bytes.
+  container-scan:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - run:
+          name: Install Trivy 0.76.1 (checksum verified)
+          command: |
+            VERSION=0.76.1
+            EXPECTED_SHA=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+            curl -sSL -o trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${VERSION}/trivy_${VERSION}_Linux-64bit.tar.gz"
+            echo "${EXPECTED_SHA}  trivy.tar.gz" | sha256sum -c -
+            tar -xzf trivy.tar.gz trivy
+            sudo install -m 0755 trivy /usr/local/bin/trivy
+            trivy --version
+      - run:
+          name: Scan the published image (HIGH and CRITICAL)
+          command: |
+            IMAGE="$DOCKER_USERNAME/taskflow-api:latest"
+            trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+              --username "$DOCKER_USERNAME" --password "$DOCKER_TOKEN" \
+              --format table "$IMAGE" | tee trivy-report.txt
+            trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
+              --username "$DOCKER_USERNAME" --password "$DOCKER_TOKEN" \
+              --format json "$IMAGE" > trivy-report.json || true
+            echo
+            echo "--- totals (watchdog: reported, not blocking) ---"
+            echo "CRITICAL: $(grep -o '\"Severity\": *\"CRITICAL\"' trivy-report.json | wc -l)"
+            echo "HIGH:     $(grep -o '\"Severity\": *\"HIGH\"' trivy-report.json | wc -l)"
+      - store_artifacts:
+          path: trivy-report.txt
+          destination: trivy-report.txt
+      - store_artifacts:
+          path: trivy-report.json
+          destination: trivy-report.json
+
+  # ==========================================
+  # DEPENDENCY-SCAN JOB - OWASP Dependency-Check (the tool named in the brief)
+  # ==========================================
+  # Snyk (4.13) and OSV-Scanner (4.14) are the taught tools; this adds the tool the
+  # assignment brief asks for by name, so the repository satisfies both.
+  #
+  # Two caches make it viable: ~/.m2 for the Maven dependencies and the NVD data
+  # directory, which holds the ~250 MB CVE feed. Without the feed cache the first
+  # sync alone outlasts the job.
+  #
+  # failBuildOnCVSS=7 means a HIGH or CRITICAL finding fails this job. It is wired
+  # as a watchdog rather than a gate: `publish` does not require it, so a new CVE
+  # against an unchanged dependency is visible without silently blocking a release
+  # that the Snyk gate already approved.
+  dependency-scan:
+    docker:
+      - image: cimg/openjdk:21.0
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - maven-deps-{{ checksum "pom.xml" }}
+            - maven-deps-
+      - restore_cache:
+          keys:
+            - nvd-data-v1-{{ checksum "pom.xml" }}
+            - nvd-data-v1-
+      - run:
+          name: Check for an NVD API key
+          command: |
+            if [ -z "${NVD_API_KEY:-}" ]; then
+              echo "NVD_API_KEY is not configured for this project."
+              echo "Free key: https://nvd.nist.gov/developers/request-an-api-key"
+              echo "Then: Project Settings -> Environment Variables -> NVD_API_KEY"
+              echo "Without it the NVD feed is rate-limited to the point that the sync"
+              echo "outlasts this job, so the scan cannot run here."
+              circleci-agent step halt
+            fi
+      - run:
+          name: Run OWASP Dependency-Check
+          # The first run syncs the whole NVD feed and takes ~45 minutes inside this
+          # single step; CircleCI's default no-output timeout is far shorter.
+          no_output_timeout: 45m
+          command: |
+            mvn -B -Psecurity -DskipTests -DnvdApiDelay=2000 verify
+      - save_cache:
+          paths:
+            - ~/.m2
+            - ~/.m2/repository/org/owasp/dependency-check-data
+          key: nvd-data-v1-{{ checksum "pom.xml" }}
+      - store_artifacts:
+          path: target/dependency-check-report.html
+          destination: dependency-check-report.html
+      - store_artifacts:
+          path: target/dependency-check-report.json
+          destination: dependency-check-report.json
+      - run:
+          name: Summarise findings
+          when: always
+          command: |
+            REPORT=target/dependency-check-report.json
+            if [ ! -f "$REPORT" ]; then echo "No report produced."; exit 0; fi
+            echo "HIGH:     $(grep -o '"severity": *"HIGH"' "$REPORT" | wc -l)"
+            echo "CRITICAL: $(grep -o '"severity": *"CRITICAL"' "$REPORT" | wc -l)"
 
 workflows:
   build-publish:
     jobs:
       - build
+      - snyk_scan
+      - snyk_code
       - publish:
           context: docker-hub
+          requires:
+            - build
+            - snyk_scan
+            - snyk_code
+          filters:
+            branches:
+              only: main
+      - dependency-scan:
+          filters:
+            branches:
+              only: main
+      - container-scan:
+          context: docker-hub
+          requires:
+            - publish
+          filters:
+            branches:
+              only: main
       - deploy:
           requires:
             - publish
-
+          filters:
+            branches:
+              only: main

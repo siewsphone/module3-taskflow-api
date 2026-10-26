@@ -14,7 +14,15 @@ target/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Windows/NTFS metadata written when files are copied from a Windows host
+*:Zone.Identifier
 
 # Environment / secrets - never commit these
 .env
 *.env
+
+# Frontend (Netlify stretch goal)
+frontend/node_modules/
+frontend/dist/

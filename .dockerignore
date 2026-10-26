@@ -1,0 +1,23 @@
+# Build output - rebuilt inside the image by Stage 1
+target/
+
+# Git history is not needed to build the JAR
+.git/
+.gitignore
+
+# IDE / editor
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS / editor backups
+.DS_Store
+*~
+*:Zone.Identifier
+
+# Local docs that are not part of the build
+README.md
+screenshots/

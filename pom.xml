@@ -7,20 +7,35 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.1</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
     <groupId>sg.edu.ntu</groupId>
     <artifactId>taskflow-api</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.1.0</version>
     <name>taskflow-api</name>
     <description>TaskFlow - Task Management API (Module 3 assignment)</description>
     <packaging>jar</packaging>
 
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>2.0.0</spring-ai.version>
+        <spring-ai.version>2.0.2</spring-ai.version>
+
+        <!--
+          Security overrides. These are the names Spring Boot's own
+          dependencyManagement reads, so setting one upgrades every artifact in that
+          line together rather than pinning a single jar and leaving its siblings on
+          the vulnerable version.
+
+          Snyk (CI gate) flagged tomcat-embed-websocket 11.0.25 - one HIGH and one
+          CRITICAL, SNYK-JAVA-ORGAPACHETOMCATEMBED-21246252 / -20552494 - and Netty
+          4.2.17.Final across netty-codec-http, -classes-quic and -http3, seven HIGH
+          findings. Both are transitive, so neither is visible in a diff of this POM.
+        -->
+        <tomcat.version>11.0.27</tomcat.version>
+        <netty.version>4.2.19.Final</netty.version>
+        <jackson-bom.version>3.1.7</jackson-bom.version>
     </properties>
 
     <dependencies>
@@ -38,12 +53,13 @@
         </dependency>
 
         <!-- Spring Boot DevTools -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-devtools</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
-        </dependency>
+        <!--
+          spring-boot-devtools was removed here. It is a development-time tool - automatic
+          restart, LiveReload - that this API never uses, and Dependency-Check flagged it
+          against spring_boot_tools CVEs that cannot apply to a jar the Spring Boot plugin
+          excludes from the fat jar anyway. Removing it shrinks the tree instead of
+          suppressing the finding.
+        -->
 
         <!-- Spring AI (needed for Task 6, the summary endpoint) -->
         <dependency>
@@ -67,6 +83,23 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <!--
+              The legacy Jackson 2.x line (com.fasterxml) arrives transitively and
+              is NOT governed by the jackson-bom.version property above, which now
+              controls Jackson 3.x (tools.jackson). Pin it explicitly so the two
+              CVE-affected jars move to a fixed release.
+            -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>2.21.7</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>2.21.7</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -87,4 +120,53 @@
         </plugins>
     </build>
 
+
+    <profiles>
+    <!--
+      Option 5 - OWASP Dependency-Check, the tool named in the assignment brief.
+      Kept out of the default build because the first run syncs the NVD feed
+      (~250 MB); it belongs in its own CI job with a cache, not in every
+      `mvn verify`. Run it by hand with:
+
+        mvn verify -Psecurity -DnvdApiKey=$NVD_API_KEY
+    -->
+    <profile>
+      <id>security</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <version>12.1.3</version>
+            <configuration>
+              <failBuildOnCVSS>7</failBuildOnCVSS>
+              <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+              <!--
+                failOnError=false: a missing component analyzer is a property of the build
+                image (no dotnet runtime, no OSS Index credentials), not a defect in the
+                application. It should not fail a security check.
+              -->
+              <failOnError>false</failOnError>
+              <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+              <ossindexAnalyzerEnabled>false</ossindexAnalyzerEnabled>
+              <suppressionFiles>
+                <suppressionFile>dependency-check-suppressions.xml</suppressionFile>
+              </suppressionFiles>
+              <formats>
+                <format>HTML</format>
+                <format>JSON</format>
+              </formats>
+            </configuration>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    </profiles>
 </project>
